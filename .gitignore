@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Client build output (npm run setup rebuilds it)
+client/dist/
+
+# Live database, sessions & backups (auto-created and seeded on first run;
+# contains password hashes and session tokens — never commit)
+server/data/
+
+# Security-scan tool artifacts
+.mimosa/
+
+# Stray screen recording
+server/*.mp4
+
+# Environment files (config lives in the DB settings table, but just in case)
+.env
+.env.*
+
+# OS junk
+Thumbs.db
+.DS_Store
+
+# Logs
+*.log

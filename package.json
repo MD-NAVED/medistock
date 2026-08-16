@@ -1,0 +1,13 @@
+{
+  "name": "medistock",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MediStock - Pharmacy Billing & Inventory Management System",
+  "scripts": {
+    "setup": "npm run setup:server && npm run setup:client",
+    "setup:server": "cd server && npm install",
+    "setup:client": "cd client && npm install && npm run build",
+    "start": "node server/index.js",
+    "dev": "cd client && npm run dev"
+  }
+}
