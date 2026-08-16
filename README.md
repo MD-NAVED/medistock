@@ -13,9 +13,10 @@ A complete pharmacy management system with **automatic stock tracking**, **FEFO 
 
 ### First-Time Setup
 ```bash
+git clone https://github.com/MD-NAVED/medistock.git
 cd medistock
 
-# Install dependencies
+# Install dependencies (also builds the client)
 npm run setup
 
 # Start the app
@@ -37,9 +38,20 @@ Then open **http://localhost:3001** in your browser.
 
 ### Running the tests
 ```bash
-npm start                    # in one terminal
-node server/test-api.js      # in another — 59 checks
+npm start                                            # in one terminal
+node server/test-api.js                              # 59 checks — core suite
+node server/test-edit-purchase.js                    # 23 checks — purchase editing
+AUDIT_MODE=phase1 node server/test-audit.js          # 19 checks + prints a session token
 ```
+
+The audit's second phase proves DB-backed sessions survive a server restart — stop the
+server (Ctrl+C), start it again, then run with the token phase 1 printed:
+
+```bash
+AUDIT_MODE=phase2 RESTART_TOKEN=<token> node server/test-audit.js    # 4 checks
+```
+
+**105 checks in total — all currently passing.**
 
 ---
 
@@ -90,6 +102,10 @@ Every bill in **Reports** opens a detail view with the two corrections a counter
 - Manual entry with batch number, expiry date, buy price per item
 - **Automatic stock increase** — existing batches get quantity added, new batches are created
 - **Purchase detail view** showing every line of a supplier invoice
+- **Edit a purchase** (owner only) — fix a wrong quantity, buy price, supplier name or swap
+  the batch entirely. Stock reconciles itself to match the edit: reducing a line pulls units
+  out, adding puts them in. If a reduction would take a batch below what has already been
+  sold, the whole edit is refused with the exact remaining count — nothing is half-applied.
 - **Reverse a purchase** (owner only) for an invoice entered twice or by mistake — it pulls the
   same units back out of stock. If any of that stock has already been sold, the reversal is
   refused with an exact count rather than pushing a batch negative.
@@ -174,7 +190,9 @@ medistock/
 │   ├── index.js          # Express server + all API routes
 │   ├── db.js             # SQLite schema, migrations, seed data, password hashing
 │   ├── backup.js         # Automatic + manual database backups
-│   ├── test-api.js       # End-to-end API test suite (59 checks)
+│   ├── test-api.js            # End-to-end API test suite (59 checks)
+│   ├── test-edit-purchase.js  # Purchase-editing suite (23 checks)
+│   ├── test-audit.js          # Coverage-gap + session-restart audit (19+4 checks)
 │   └── data/
 │       ├── medistock.db  # Auto-created SQLite database
 │       └── backups/      # Rolling database backups (30 kept)
@@ -228,6 +246,7 @@ Cancel bill    → every unreturned unit goes back to its original batch
 Return items   → the returned units go back to their original batch
 Write off      → expired/damaged units leave the batch, loss recorded
 Reverse buy    → purchased units come back out of the batch (blocked if already sold)
+Edit purchase  → stock reconciles to match the edit (refused if it would undercut sold stock)
 ```
 
 ### FEFO (First Expiry, First Out)
