@@ -1,27 +1,25 @@
 {
-  "version": 2,
-  "builds": [
-    {
-      "src": "api/index.js",
-      "use": "@vercel/node",
-      "config": { "includeFiles": "server/**" }
-    },
-    {
-      "src": "client/package.json",
-      "use": "@vercel/static-build",
-      "outputDirectory": "dist"
-    }
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "npm install --omit=dev",
+  "buildCommand": "cd client && npm install && npm run build",
+  "outputDirectory": "client/dist",
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/index" },
+    { "source": "/(.*)", "destination": "/index.html" }
   ],
-  "routes": [
-    { "src": "/api/(.*)", "dest": "api/index.js" },
+  "headers": [
     {
-      "src": "/assets/(.*)",
-      "headers": { "cache-control": "public, max-age=31536000, immutable" },
-      "dest": "client/assets/$1"
+      "source": "/assets/(.*)",
+      "headers": [{ "key": "cache-control", "value": "public, max-age=31536000, immutable" }]
     },
-    { "src": "/manifest.webmanifest", "headers": { "content-type": "application/manifest+json" }, "dest": "client/manifest.webmanifest" },
-    { "src": "/sw.js", "headers": { "cache-control": "public, max-age=0, must-revalidate", "service-worker-allowed": "/" }, "dest": "client/sw.js" },
-    { "src": "/icon-(.*)", "headers": { "cache-control": "public, max-age=86400" }, "dest": "client/icon-$1" },
-    { "src": "/(.*)", "dest": "client/index.html" }
+    {
+      "source": "/sw.js",
+      "headers": [{ "key": "cache-control", "value": "public, max-age=0, must-revalidate" }]
+    },
+    {
+      "source": "/icon-(.*)",
+      "headers": [{ "key": "cache-control", "value": "public, max-age=86400" }]
+    }
   ]
 }
