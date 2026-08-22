@@ -9,7 +9,14 @@
  *  4. Reversed purchase is not editable (409).
  *  5. Reducing a batch below sold stock is refused (409).
  */
-const BASE = process.env.BASE || 'http://localhost:3001';
+// These suites only ever talk to the local dev server.
+const RAW_BASE = process.env.BASE || 'http://localhost:3001';
+const { hostname: BASE_HOST } = new URL(RAW_BASE);
+if (BASE_HOST !== 'localhost' && BASE_HOST !== '127.0.0.1') {
+  console.error('BASE must point at localhost (these tests hit the local dev server only)');
+  process.exit(1);
+}
+const BASE = RAW_BASE;
 let pass = 0, fail = 0;
 const results = [];
 

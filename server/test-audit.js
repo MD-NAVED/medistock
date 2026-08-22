@@ -12,7 +12,14 @@
  *     must stop and restart the server between the two halves. A token fetched
  *     before the restart must still authenticate after it.
  */
-const BASE = process.env.BASE || 'http://localhost:3001';
+// These suites only ever talk to the local dev server.
+const RAW_BASE = process.env.BASE || 'http://localhost:3001';
+const { hostname: BASE_HOST } = new URL(RAW_BASE);
+if (BASE_HOST !== 'localhost' && BASE_HOST !== '127.0.0.1') {
+  console.error('BASE must point at localhost (these tests hit the local dev server only)');
+  process.exit(1);
+}
+const BASE = RAW_BASE;
 const MODE = process.env.AUDIT_MODE || 'phase1'; // phase1 | phase2
 let pass = 0, fail = 0;
 const results = [];
@@ -22,9 +29,11 @@ function check(name, ok, detail = '') {
   else { fail++; results.push(`  FAIL  ${name}${detail ? ' -> ' + detail : ''}`); }
 }
 
+const API_PATH_RE = /^\/[A-Za-z0-9\-\/]*$/;
 async function call(p, { method = 'GET', body, token } = {}) {
-  const url = new URL(p, BASE);
-  const res = await fetch(url, {
+  // Only relative /api paths — a request can never leave the gated BASE origin.
+  if (typeof p !== 'string' || !API_PATH_RE.test(p)) throw new Error('test path must be a relative /api path');
+  const res = await fetch(BASE + p, {
     method,
     headers: {
       'Content-Type': 'application/json',
@@ -39,12 +48,6 @@ async function call(p, { method = 'GET', body, token } = {}) {
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const STAMP = Date.now();
-
-// A token fetched in phase 1 is stashed server-side via a medicine name suffix
-// so phase 2 can confirm the *same* token still works after a restart. We just
-// re-use the owner login credentials; the token itself is stateless-looking but
-// bound to the DB row, so on restart in-memory stores would lose it.
-const PHASE1_TOKEN_FILE = BASE.includes('localhost') ? null : null;
 
 (async () => {
   if (MODE === 'phase1') {
@@ -67,6 +70,10 @@ const PHASE1_TOKEN_FILE = BASE.includes('localhost') ? null : null;
       const found = await call('/api/medicines?q=AuditBatchMed', { token: owner });
       medId = (found.data || []).find((m) => m.name === `AuditBatchMed-${STAMP}`)?.id;
     }
+    // medId feeds a URL path below — accept only a positive integer so the
+    // path can never carry scheme/host characters.
+    medId = Number(medId);
+    if (!Number.isInteger(medId) || medId <= 0) throw new Error('audit medicine id missing');
     check('audit medicine created', !!medId, JSON.stringify(medR.data));
     const BATCH = `AUDBTCH-${STAMP}`;
     const pur = await call('/api/purchases', { method: 'POST', token: owner, body: {
@@ -76,7 +83,8 @@ const PHASE1_TOKEN_FILE = BASE.includes('localhost') ? null : null;
     } });
     check('audit purchase posted', pur.status === 200, JSON.stringify(pur.data));
 
-    const bRes = await call('/api/medicines/' + medId + '/batches', { token: owner });
+    const medBatchesPath = `/api/medicines/${medId}/batches`;
+    const bRes = await call(medBatchesPath, { token: owner });
     check('GET /api/medicines/:id/batches returns 200', bRes.status === 200, JSON.stringify(bRes.data));
     const myBatch = (bRes.data || []).find((b) => b.batch_number === BATCH);
     check('batch view lists the new batch with qty 14', myBatch && myBatch.quantity === 14, JSON.stringify(bRes.data));
@@ -84,7 +92,7 @@ const PHASE1_TOKEN_FILE = BASE.includes('localhost') ? null : null;
     check('batch view exposes days_left', myBatch && Number.isFinite(Number(myBatch.days_left)), JSON.stringify(myBatch));
 
     // staff should also see batches (read-only is fine)
-    const bStaff = await call('/api/medicines/' + medId + '/batches', { token: staff });
+    const bStaff = await call(medBatchesPath, { token: staff });
     check('staff can read batches', bStaff.status === 200, `status=${bStaff.status}`);
 
     // ---- Gap 2: GET /api/purchases list ----
@@ -114,7 +122,7 @@ const PHASE1_TOKEN_FILE = BASE.includes('localhost') ? null : null;
     // simply by being printed. The operator passes RESTART_TOKEN=<token>.
     console.log('\n>>> RESTART-SERVER-NOW <<<');
     console.log('   - Stop the node server (Ctrl+C or kill).');
-    console.log('   - Restart it: PORT=3001 node server/index.js');
+    console.log('   - Restart it: PORT=3001 node server/dev.js');
     console.log('   - Then run: AUDIT_MODE=phase2 RESTART_TOKEN=' + owner + ' node server/test-audit.js');
     console.log('   (staff token for reference: ' + staff + ')');
     printResults();

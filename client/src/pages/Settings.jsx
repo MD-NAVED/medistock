@@ -3,7 +3,7 @@ import {
   Box, Typography, Paper, Tabs, Tab, TextField, Button, Switch,
   FormControlLabel, Divider, Snackbar, Alert, Dialog, DialogTitle,
   DialogContent, DialogActions, MenuItem, Chip, IconButton, Tooltip,
-  CircularProgress, useMediaQuery,
+  useMediaQuery,
 } from '@mui/material';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import SaveIcon from '@mui/icons-material/Save';
@@ -11,14 +11,10 @@ import BlockIcon from '@mui/icons-material/Block';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import LockResetIcon from '@mui/icons-material/LockReset';
 import KeyIcon from '@mui/icons-material/Key';
-import BackupIcon from '@mui/icons-material/Backup';
+import CloudDoneIcon from '@mui/icons-material/CloudDone';
 import { api } from '../api';
 import { useAuth } from '../auth';
 import { fmtDateTime } from '../utils';
-
-const fmtSize = (bytes) => (bytes < 1024 * 1024
-  ? Math.max(1, Math.round(bytes / 1024)) + ' KB'
-  : (bytes / (1024 * 1024)).toFixed(1) + ' MB');
 
 export default function Settings() {
   const { user } = useAuth();
@@ -42,18 +38,12 @@ export default function Settings() {
   const [resetBusy, setResetBusy] = useState(false);
   const [resetError, setResetError] = useState('');
 
-  // backups
-  const [backups, setBackups] = useState(null);
-  const [backupBusy, setBackupBusy] = useState(false);
-
   useEffect(() => {
     api('/api/settings').then(setStore).catch((e) => setSnack({ severity: 'error', message: e.message }));
     loadUsers();
-    loadBackups();
   }, []);
 
   const loadUsers = () => api('/api/users').then(setUsers).catch(() => {});
-  const loadBackups = () => api('/api/backups').then(setBackups).catch(() => setBackups([]));
 
   const saveStore = async () => {
     try {
@@ -125,19 +115,6 @@ export default function Settings() {
       setResetError(e.message);
     } finally {
       setResetBusy(false);
-    }
-  };
-
-  const runBackup = async () => {
-    setBackupBusy(true);
-    try {
-      const r = await api('/api/backups', { method: 'POST' });
-      setSnack({ severity: 'success', message: `Backup saved (${fmtSize(r.size)})` });
-      loadBackups();
-    } catch (e) {
-      setSnack({ severity: 'error', message: e.message });
-    } finally {
-      setBackupBusy(false);
     }
   };
 
@@ -233,36 +210,16 @@ export default function Settings() {
           </Paper>
 
           <Paper sx={{ p: { xs: 2, md: 3 } }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
-              <Typography variant="h6" sx={{ flexGrow: 1 }}>Database backups</Typography>
-              <Button variant="contained" startIcon={<BackupIcon />} onClick={runBackup} disabled={backupBusy}>
-                {backupBusy ? 'Backing up…' : 'Back up now'}
-              </Button>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+              <CloudDoneIcon color="success" />
+              <Typography variant="h6">Database backups</Typography>
             </Box>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              A backup is taken automatically when the server starts and every 6 hours after that.
-              The 30 most recent copies are kept in <code>server/data/backups</code>. Copy that
-              folder to a pen drive or cloud drive regularly — a backup on the same computer does
-              not survive a disk failure.
+            <Typography variant="body2" color="text.secondary">
+              Your data lives in a managed cloud database (Supabase). Backups are handled by the
+              database provider, so there is nothing to run from this page. For extra safety you
+              can export a copy of your data from the Supabase dashboard (Database → Backups,
+              or a CSV export of each table) whenever you want an off-site copy.
             </Typography>
-            <Divider sx={{ mb: 1 }} />
-            {backups === null && <CircularProgress size={22} />}
-            {backups && backups.length === 0 && (
-              <Typography variant="body2" color="text.secondary">No backups yet.</Typography>
-            )}
-            {backups && backups.slice(0, 8).map((b) => (
-              <Box key={b.name} sx={{ display: 'flex', justifyContent: 'space-between', gap: 1, py: 0.6 }}>
-                <Typography variant="body2" sx={{ wordBreak: 'break-all' }}>{b.name}</Typography>
-                <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
-                  {fmtSize(b.size)}
-                </Typography>
-              </Box>
-            ))}
-            {backups && backups.length > 8 && (
-              <Typography variant="caption" color="text.secondary">
-                …and {backups.length - 8} older backup(s)
-              </Typography>
-            )}
           </Paper>
 
           <Paper sx={{ p: { xs: 2, md: 3 } }}>
@@ -275,9 +232,9 @@ export default function Settings() {
                 <li>Deactivating a user immediately ends their open sessions.</li>
               </ul>
             </Typography>
-            <Alert severity="warning" sx={{ mt: 2 }}>
-              Still to do before charging other stores: serve the app over <b>HTTPS</b> and keep
-              off-site copies of the backups. See “Running securely” in the README.
+            <Alert severity="info" sx={{ mt: 2 }}>
+              Traffic is served over <b>HTTPS</b> by the hosting platform. Keep your Supabase
+              login safe — anyone with it can reach the database directly.
             </Alert>
           </Paper>
         </Box>

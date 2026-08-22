@@ -4,10 +4,20 @@
   "private": true,
   "description": "MediStock - Pharmacy Billing & Inventory Management System",
   "scripts": {
-    "setup": "npm run setup:server && npm run setup:client",
+    "setup": "npm install && npm run setup:server && npm run setup:client",
     "setup:server": "cd server && npm install",
     "setup:client": "cd client && npm install && npm run build",
-    "start": "node server/index.js",
-    "dev": "cd client && npm run dev"
+    "start": "node server/dev.js",
+    "dev": "node server/dev.js",
+    "dev:client": "cd client && npm run dev",
+    "test": "node scripts/local-test.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "pg": "^8.12.0"
+  },
+  "devDependencies": {
+    "embedded-postgres": "^18.4.0-beta.17",
+    "postgres-migrations": "^5.3.0"
   }
 }

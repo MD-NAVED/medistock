@@ -1,15 +1,17 @@
 # 💊 MediStock — Pharmacy Billing & Inventory Management
 
-A complete pharmacy management system with **automatic stock tracking**, **FEFO billing** (sell soonest-expiry first), **batch & expiry management**, **low-stock alerts**, and **professional billing**. Built with React + Material UI and Node.js + SQLite.
+A complete pharmacy management system with **automatic stock tracking**, **FEFO billing** (sell soonest-expiry first), **batch & expiry management**, **low-stock alerts**, and **professional billing**. Built with React + Material UI and Node.js + PostgreSQL. Runs locally with one command, and deploys to **Vercel + Supabase** for free cloud hosting.
 
 ![MediStock Dashboard](gui-test-screenshots/t2_dashboard.png)
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Quick Start (local)
 
 ### Prerequisites
-- **Node.js 22+** (v24 recommended — includes built-in SQLite)
+- **Node.js 22+**
+- A **PostgreSQL** database — either one running locally, or a free cloud
+  database from [Supabase](https://supabase.com) (see Deployment below)
 
 ### First-Time Setup
 ```bash
@@ -19,11 +21,19 @@ cd medistock
 # Install dependencies (also builds the client)
 npm run setup
 
-# Start the app
-npm start
+# Point the server at your database and start it
+DATABASE_URL=postgres://user:password@localhost:5432/medistock npm start
 ```
 
+If your local Postgres doesn't have the schema yet, create the `medistock`
+database and run `scripts/init-supabase.sql` in it (psql, pgAdmin, or any SQL
+client). The script creates all 13 tables, the demo accounts and a demo
+catalog with opening stock.
+
 Then open **http://localhost:3001** in your browser.
+
+> No `DATABASE_URL`? The server defaults to
+> `postgres://postgres:postgres@localhost:5432/medistock`.
 
 ### Demo Logins
 | Role    | Username | Password  |
@@ -37,21 +47,69 @@ Then open **http://localhost:3001** in your browser.
 > Change both demo passwords before using this in a real shop — Settings → Security → Change my password.
 
 ### Running the tests
-```bash
-npm start                                            # in one terminal
-node server/test-api.js                              # 59 checks — core suite
-node server/test-edit-purchase.js                    # 23 checks — purchase editing
-AUDIT_MODE=phase1 node server/test-audit.js          # 19 checks + prints a session token
-```
 
-The audit's second phase proves DB-backed sessions survive a server restart — stop the
-server (Ctrl+C), start it again, then run with the token phase 1 printed:
+One command spins up a throwaway embedded PostgreSQL, loads the schema, starts
+the server and runs every suite (it cleans up after itself):
 
 ```bash
-AUDIT_MODE=phase2 RESTART_TOKEN=<token> node server/test-audit.js    # 4 checks
+npm test
 ```
 
-**105 checks in total — all currently passing.**
+**102 checks in total — all currently passing** (56 core API, 23 purchase
+editing, 19+4 audit including the session-survives-restart proof). To run the
+suites by hand against an already-running server:
+
+```bash
+node server/test-api.js
+node server/test-edit-purchase.js
+AUDIT_MODE=phase1 node server/test-audit.js
+# restart the server, then:
+AUDIT_MODE=phase2 RESTART_TOKEN=<token> node server/test-audit.js
+```
+
+---
+
+## ☁️ Deployment — Vercel + Supabase (free tier)
+
+The app is serverless-ready: the Express API becomes a Vercel function
+(`api/index.js`), the React client becomes static files, and the database is
+Supabase PostgreSQL. No idle spin-down, HTTPS everywhere.
+
+### 1. Create the database (Supabase)
+1. Sign up at [supabase.com](https://supabase.com) → **New project** (free tier
+   is fine). Pick a region near you and set a database password.
+2. Open **SQL Editor** → paste the whole of `scripts/init-supabase.sql` → **Run**.
+   This creates every table plus the demo accounts and catalog.
+3. Go to **Project Settings → Database → Connection string → URI** and copy the
+   **Connection pooling / Transaction mode** URI (port `6543`). It looks like:
+   `postgres://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres`
+   > Use the **pooler** URI, not the direct one — serverless functions open
+   > many short-lived connections and the pooler is built for exactly that.
+
+### 2. Deploy the app (Vercel)
+1. Push this repo to GitHub.
+2. In Vercel: **Add New → Project** → import the repo. The `vercel.json` at the
+   root already configures the API function and the client build — no other
+   settings needed.
+3. In the project's **Settings → Environment Variables** add:
+   - `DATABASE_URL` = the pooler URI from step 1
+   - `DATABASE_POOL_MAX` = `3` (keeps each function instance light on the free
+     connection limit)
+4. **Deploy.** Log in with the demo accounts, then **immediately change both
+   passwords**.
+
+### 3. Optional — strict TLS verification
+Traffic to Supabase is always TLS-encrypted. By default the app does not verify
+Supabase's certificate chain (same as `sslmode=require`, Supabase's own
+serverless default). To enable full verification:
+download `prod-ca-2021.crt` from **Supabase → Settings → Database → SSL
+configuration**, and set `DATABASE_SSL_CA` to the certificate's PEM content
+(one env var, paste the whole file including `BEGIN CERTIFICATE` lines).
+
+### Backups
+Backups are managed by the database provider — from the Supabase dashboard you
+can export any table as CSV, or restore to a daily snapshot on paid plans. The
+old in-app backup buttons are gone because serverless has no local disk.
 
 ---
 
@@ -129,8 +187,8 @@ Every bill in **Reports** opens a detail view with the two corrections a counter
 ### ⚙️ Settings (Owner Only)
 - **Store** — name, address, phone, drug license number, GST enable/disable + GSTIN
 - **Users** — add staff/owner accounts, activate/deactivate, reset a forgotten password
-- **Security** — change your own password, run a manual database backup, review recent backups,
-  and see exactly how the install is protected
+- **Security** — change your own password and see how the install is protected; database
+  backups are handled by the database provider (Supabase), not from this page
 
 
 ---
@@ -140,10 +198,11 @@ Every bill in **Reports** opens a detail view with the two corrections a counter
 | Layer | Technology |
 |-------|-----------|
 | 🎨 UI | React 18 + Material UI 6 + MUI X (DataGrid, Charts) |
-| ⚙️ Server | Node.js + Express |
-| 🗄️ Database | SQLite (Node.js built-in — zero installation) |
+| ⚙️ Server | Node.js + Express (exported as a Vercel serverless function) |
+| 🗄️ Database | PostgreSQL via `node-postgres` (pg), transactions for every stock change |
 | 🔐 Auth | scrypt password hashing + database-backed sessions |
 | 📦 Build | Vite |
+| ☁️ Hosting | Vercel (functions + static) with Supabase PostgreSQL |
 
 ---
 
@@ -154,15 +213,14 @@ Every bill in **Reports** opens a detail view with the two corrections a counter
 - **Passwords** are hashed with **scrypt** (salted, 16384 rounds) — never stored readably.
   Accounts created under the earlier SHA-256 scheme are re-hashed automatically on their next
   successful login, so no account stays on the weak algorithm.
-- **Sessions live in the database**, not server memory. Restarting the server no longer signs
-  everyone out. Sessions expire after 30 days and are cleaned up hourly.
+- **Sessions live in the database**, not server memory. Restarting the server (or a cold
+  serverless function) does not sign anyone out. Sessions expire after 30 days.
 - **Login rate limiting** — 8 wrong passwords for one username locks that username for 15
   minutes. The lock is per-username, so one person guessing cannot block everyone else.
 - **Session revocation** — deactivating a user, changing a password, or an owner resetting a
   password immediately invalidates that user's other sessions.
-- **Automatic backups** — a consistent copy of the database (via SQLite `VACUUM INTO`, safe while
-  the server is running) is written on startup and every 6 hours into `server/data/backups`.
-  The 30 most recent copies are kept. Owners can also back up on demand from Settings → Security.
+- **TLS to the database** on remote hosts (encrypted always; full chain verification available
+  via `DATABASE_SSL_CA` — see Deployment). Localhost connections stay plain.
 - **Hardening headers** — `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, and
   HSTS when served over HTTPS.
 - **Every stock change is transactional** — a cancel, return, write-off or reversal either
@@ -170,15 +228,13 @@ Every bill in **Reports** opens a detail view with the two corrections a counter
 
 **Running securely — do this before charging other stores**
 
-1. **Serve over HTTPS.** The app does not terminate TLS itself. Put nginx, Caddy, or a cloud
-   load balancer in front of it and forward to port 3001. Passwords and session tokens travel in
-   plain HTTP otherwise.
-2. **Keep backups off the machine.** A backup sitting on the same disk does not survive a disk
-   failure or theft. Copy `server/data/backups` to a pen drive, another computer, or cloud
-   storage on a schedule.
-3. **Change the demo passwords** (`owner123` / `staff123`) immediately.
-4. **Restrict who can reach the port.** On a shop LAN, bind the server to the local network and
-   do not expose port 3001 to the internet directly.
+1. **Change the demo passwords** (`owner123` / `staff123`) immediately.
+2. **Keep your Supabase account safe** — anyone with the dashboard login can reach the
+   database directly. Turn on 2FA in Supabase.
+3. Deployed on Vercel, HTTPS is automatic. For self-hosting, put nginx, Caddy, or a cloud
+   load balancer in front of the app — passwords and session tokens should never travel in
+   plain HTTP.
+4. Take an occasional export (CSV from the Supabase dashboard) as an off-site copy.
 
 ---
 
@@ -186,16 +242,15 @@ Every bill in **Reports** opens a detail view with the two corrections a counter
 
 ```
 medistock/
+├── api/
+│   └── index.js          # Vercel serverless entry — re-exports the Express app
 ├── server/
-│   ├── index.js          # Express server + all API routes
-│   ├── db.js             # SQLite schema, migrations, seed data, password hashing
-│   ├── backup.js         # Automatic + manual database backups
-│   ├── test-api.js            # End-to-end API test suite (59 checks)
+│   ├── index.js          # Express app + all API routes (module, no listener)
+│   ├── dev.js            # Local dev listener (npm start)
+│   ├── db.js             # pg Pool, transactions, scrypt password hashing
+│   ├── test-api.js            # End-to-end API test suite (56 checks)
 │   ├── test-edit-purchase.js  # Purchase-editing suite (23 checks)
-│   ├── test-audit.js          # Coverage-gap + session-restart audit (19+4 checks)
-│   └── data/
-│       ├── medistock.db  # Auto-created SQLite database
-│       └── backups/      # Rolling database backups (30 kept)
+│   └── test-audit.js          # Coverage-gap + session-restart audit (19+4 checks)
 ├── client/
 │   ├── src/
 │   │   ├── App.jsx       # Main app with routes
@@ -220,6 +275,10 @@ medistock/
 │   │       └── Settings.jsx   # Store, users, security
 │   ├── index.html
 │   └── vite.config.js
+├── scripts/
+│   ├── init-supabase.sql # Full schema + demo seed — run in Supabase SQL Editor
+│   └── local-test.js     # npm test — embedded Postgres + all suites
+├── vercel.json           # Vercel build & routing config
 ├── package.json
 └── README.md
 ```
@@ -276,7 +335,6 @@ separately so nothing is hidden — you can see both the clean number and what w
 
 - 📷 **Camera invoice scanning** — point camera at supplier bill, auto-fill purchase
 - 🏷️ **Barcode scanning** — scan medicine barcode at billing
-- ☁️ **Cloud hosting** — multi-store, access from anywhere
 - 💳 **Subscription management** — plans by store size
 - 📱 **Mobile app** — for storekeepers on the go
 - 🧾 **GST e-invoice** — auto-generated tax invoices

@@ -2,7 +2,14 @@
  * End-to-end API checks for the Level 1 + Level 2 work.
  * Run with the server already listening on PORT (default 3001).
  */
-const BASE = process.env.BASE || 'http://localhost:3001';
+// These suites only ever talk to the local dev server.
+const RAW_BASE = process.env.BASE || 'http://localhost:3001';
+const { hostname: BASE_HOST } = new URL(RAW_BASE);
+if (BASE_HOST !== 'localhost' && BASE_HOST !== '127.0.0.1') {
+  console.error('BASE must point at localhost (these tests hit the local dev server only)');
+  process.exit(1);
+}
+const BASE = RAW_BASE;
 
 let pass = 0, fail = 0;
 const results = [];
@@ -299,15 +306,6 @@ async function pickStockedMedicine(token, minStock, exclude = []) {
   // ---- Session persistence marker ---------------------------------------
   const sessionCount = await call('/api/auth/me', { token: owner });
   check('owner session still valid at end of run', sessionCount.status === 200);
-
-  // ---- Backups -----------------------------------------------------------
-  const mkBackup = await call('/api/backups', { method: 'POST', token: owner });
-  check('manual backup created', mkBackup.status === 200 && mkBackup.data.size > 0, JSON.stringify(mkBackup.data));
-  const backups = await call('/api/backups', { token: owner });
-  check('backup list includes startup + manual', Array.isArray(backups.data) && backups.data.length >= 2,
-    `count=${backups.data?.length}`);
-  const backupAsStaff = await call('/api/backups', { token: backToDemo.data.token });
-  check('staff cannot see backups', backupAsStaff.status === 403);
 
   // ---- Rate limiting -----------------------------------------------------
   let lockedOut = false;

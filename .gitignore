@@ -24,3 +24,10 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Local test harness throwaway Postgres cluster + staged migration
+.local-pg/
+.local-pg-migrations/
+
+# ZCode workspace config
+.zcode/
