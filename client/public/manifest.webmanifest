@@ -1,0 +1,16 @@
+{
+  "name": "MediStock — Pharmacy Management",
+  "short_name": "MediStock",
+  "description": "Pharmacy billing & inventory management: FEFO billing, batch & expiry tracking, purchases, reports.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#00695c",
+  "theme_color": "#00695c",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

@@ -14,6 +14,7 @@ import ShoppingCartIcon from '@mui/icons-material/ShoppingCart';
 import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive';
 import BarChartIcon from '@mui/icons-material/BarChart';
 import SettingsIcon from '@mui/icons-material/Settings';
+import InstallMobileIcon from '@mui/icons-material/InstallMobile';
 import { api } from '../api';
 import { useAuth } from '../auth';
 
@@ -26,6 +27,31 @@ export default function AppLayout() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [storeName, setStoreName] = useState('');
   const [alertCount, setAlertCount] = useState(0);
+  const [installEvt, setInstallEvt] = useState(null);
+
+  // PWA install: defer the browser's own banner and offer our button instead.
+  // The button only appears when the browser actually allows an install
+  // (Chrome/Edge on desktop and Android; already-installed apps never see it).
+  useEffect(() => {
+    const standalone = window.matchMedia('(display-mode: standalone)').matches
+      || window.navigator.standalone === true;
+    if (standalone) return undefined;
+    const onPrompt = (e) => { e.preventDefault(); setInstallEvt(e); };
+    const onInstalled = () => setInstallEvt(null);
+    window.addEventListener('beforeinstallprompt', onPrompt);
+    window.addEventListener('appinstalled', onInstalled);
+    return () => {
+      window.removeEventListener('beforeinstallprompt', onPrompt);
+      window.removeEventListener('appinstalled', onInstalled);
+    };
+  }, []);
+
+  const doInstall = async () => {
+    if (!installEvt) return;
+    installEvt.prompt();
+    await installEvt.userChoice;
+    setInstallEvt(null);
+  };
 
   useEffect(() => {
     api('/api/settings').then((s) => setStoreName(s.store_name)).catch(() => {});
@@ -93,6 +119,13 @@ export default function AppLayout() {
           <Typography variant="h6" sx={{ flexGrow: 1, fontSize: { xs: 16, sm: 20 } }}>
             {storeName || 'MediStock'}
           </Typography>
+          {installEvt && (
+            <Tooltip title="Install as an app on this device">
+              <IconButton color="primary" onClick={doInstall} sx={{ mr: 0.5 }}>
+                <InstallMobileIcon />
+              </IconButton>
+            </Tooltip>
+          )}
           <Chip
             size="small"
             color={user.role === 'owner' ? 'primary' : 'default'}

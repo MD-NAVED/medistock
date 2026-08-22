@@ -285,11 +285,17 @@ medistock/
 
 ---
 
-## 📱 Mobile
+## 📱 Mobile / Install as an App
 
 Medicines, Purchases and the billing cart switch from tables to stacked cards below 900px, so a
 phone never needs sideways scrolling. Purchase entry and bill correction dialogs open full-screen
 on mobile.
+
+The app is also a **PWA** — on Android, open it in Chrome and tap **⋮ → Install app** (or the
+"Install" banner) to get it on your home screen with its own icon, launching full-screen like a
+native app. On iPhone, use Safari → Share → **Add to Home Screen**. Updates arrive automatically
+on the next launch. `scripts/gen-icons.js` regenerates the app icons if you ever want to change
+the look.
 
 ---
 
