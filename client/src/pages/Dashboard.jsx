@@ -8,6 +8,7 @@ import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import EventBusyIcon from '@mui/icons-material/EventBusy';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
+import WhatsAppIcon from '@mui/icons-material/WhatsApp';
 import { BarChart } from '@mui/x-charts/BarChart';
 import { api } from '../api';
 import { fmt, fmtQty } from '../utils';
@@ -37,11 +38,25 @@ export default function Dashboard() {
   const [dash, setDash] = useState(null);
   const [alerts, setAlerts] = useState(null);
   const [error, setError] = useState('');
+  const [waBusy, setWaBusy] = useState(false);
 
   useEffect(() => {
     api('/api/reports/dashboard').then(setDash).catch((e) => setError(e.message));
     api('/api/alerts').then(setAlerts).catch(() => {});
   }, []);
+
+  // Fetch today's ready-made summary from the server and hand it to WhatsApp
+  // as a share link — the owner picks the chat (usually his own) and taps send.
+  const sendWhatsApp = async () => {
+    setWaBusy(true);
+    try {
+      const d = await api('/api/whatsapp/summary');
+      window.open('https://wa.me/?text=' + encodeURIComponent(d.text), '_blank');
+    } catch (e) {
+      setError(e.message);
+    }
+    setWaBusy(false);
+  };
 
   if (error) return <Alert severity="error">{error}</Alert>;
   if (!dash) {
@@ -60,7 +75,19 @@ export default function Dashboard() {
 
   return (
     <Box>
-      <Typography variant="h5" sx={{ mb: 3 }}>Dashboard</Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1.5, mb: 3 }}>
+        <Typography variant="h5">Dashboard</Typography>
+        <Button
+          variant="contained"
+          disableElevation
+          startIcon={<WhatsAppIcon />}
+          onClick={sendWhatsApp}
+          disabled={waBusy}
+          sx={{ textTransform: 'none', fontWeight: 700, bgcolor: '#25D366', '&:hover': { bgcolor: '#1eb85a' } }}
+        >
+          {waBusy ? 'Ban raha hai…' : 'WhatsApp Summary'}
+        </Button>
+      </Box>
 
       <Grid container spacing={3} sx={{ mb: 3 }}>
         <Grid item xs={12} sm={6} md={3}>

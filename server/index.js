@@ -770,6 +770,76 @@ app.get('/api/alerts', requireAuth, async (req, res, next) => {
 });
 
 // ---------------------------------------------------------------------------
+// WhatsApp daily summary
+//
+// The dashboard's "WhatsApp Summary" button turns today's numbers into a
+// ready-to-send message. The server builds the text (single source of truth,
+// same net-quantity math as reports); the client just opens a wa.me share
+// link with it, so no WhatsApp API account or per-message cost is involved.
+// ---------------------------------------------------------------------------
+app.get('/api/whatsapp/summary', requireAuth, async (req, res, next) => {
+  try {
+    const [today, purchases, month, low, expiring, settings] = await Promise.all([
+      pool.query(
+        "SELECT COUNT(DISTINCT s.id)::int AS bills, COALESCE(SUM((si.quantity - si.returned_qty) * si.unit_price * (1 + COALESCE(si.gst_rate,0)/100.0)), 0)::float8 AS revenue, COALESCE(SUM((si.unit_price - si.cost_price) * (si.quantity - si.returned_qty)), 0)::float8 AS profit FROM sales s LEFT JOIN sale_items si ON si.sale_id = s.id WHERE s.created_at::date = CURRENT_DATE AND s.status != 'cancelled'"
+      ),
+      pool.query(
+        'SELECT COUNT(*)::int AS bills, COALESCE(SUM(total), 0)::float8 AS amount FROM purchases WHERE created_at::date = CURRENT_DATE AND reversed_at IS NULL'
+      ),
+      pool.query(
+        "SELECT COUNT(DISTINCT s.id)::int AS bills, COALESCE(SUM((si.quantity - si.returned_qty) * si.unit_price * (1 + COALESCE(si.gst_rate,0)/100.0)), 0)::float8 AS revenue FROM sales s LEFT JOIN sale_items si ON si.sale_id = s.id WHERE s.created_at::date >= date_trunc('month', CURRENT_DATE)::date AND s.status != 'cancelled'"
+      ),
+      pool.query(
+        'SELECT m.name FROM medicines m LEFT JOIN batches b ON b.medicine_id = m.id WHERE m.active = 1 GROUP BY m.id HAVING COALESCE(SUM(b.quantity), 0) <= m.low_stock_threshold ORDER BY COALESCE(SUM(b.quantity), 0) ASC'
+      ),
+      pool.query(
+        'SELECT m.name, b.batch_number, (b.expiry_date - CURRENT_DATE) AS days_left FROM batches b JOIN medicines m ON m.id = b.medicine_id WHERE b.quantity > 0 AND b.expiry_date <= CURRENT_DATE + 90 ORDER BY b.expiry_date ASC'
+      ),
+      pool.query('SELECT store_name FROM settings WHERE id = 1'),
+    ]);
+
+    const t = today.rows[0];
+    const p = purchases.rows[0];
+    const mo = month.rows[0];
+    const store = (settings.rows[0] || {}).store_name || 'MediStock';
+    const inr = (n) => '₹' + Math.round(Number(n)).toLocaleString('en-IN');
+
+    const lines = [];
+    lines.push(`💊 *${store} — Roz ka Hisaab*`);
+    lines.push(`📅 ${new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`);
+    lines.push('');
+    lines.push(`💰 *Aaj ki Sale:* ${inr(t.revenue)} (${t.bills} bill)`);
+    lines.push(`📈 *Aaj ka Munafa:* ${inr(t.profit)}`);
+    if (p.bills > 0) lines.push(`🛒 *Aaj ki Purchase:* ${inr(p.amount)} (${p.bills} bill)`);
+    lines.push('');
+    if (low.rows.length > 0) {
+      const extra = low.rows.length > 5 ? ` +${low.rows.length - 5} aur` : '';
+      lines.push(`⚠️ *Stock kam (${low.rows.length}):* ${low.rows.slice(0, 5).map((r) => r.name).join(', ')}${extra}`);
+    }
+    if (expiring.rows.length > 0) {
+      const top = expiring.rows.slice(0, 3)
+        .map((r) => `${r.name} (${r.days_left < 0 ? 'EXPIRED' : r.days_left + ' din'})`)
+        .join(', ');
+      const extra = expiring.rows.length > 3 ? ` +${expiring.rows.length - 3} aur` : '';
+      lines.push(`⏳ *Expiry 90 din me (${expiring.rows.length}):* ${top}${extra}`);
+    }
+    lines.push('');
+    lines.push(`📊 *Is mahine ki sale:* ${inr(mo.revenue)} (${mo.bills} bill)`);
+    lines.push('');
+    lines.push('🤖 MediStock app se');
+
+    res.json({
+      text: lines.join('\n'),
+      today: { revenue: Number(t.revenue), profit: Number(t.profit), bills: t.bills },
+      purchases: { amount: Number(p.amount), bills: p.bills },
+      month: { revenue: Number(mo.revenue), bills: mo.bills },
+      low_stock: low.rows.length,
+      expiring: expiring.rows.length,
+    });
+  } catch (e) { next(e); }
+});
+
+// ---------------------------------------------------------------------------
 // Reports
 //
 // Money and units are always counted from *net* quantities: a cancelled bill

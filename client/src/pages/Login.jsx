@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Box, Card, CardContent, Typography, TextField, Button, InputAdornment,
-  Avatar, Alert, Divider,
+  Avatar, Alert,
 } from '@mui/material';
 import LocalPharmacyIcon from '@mui/icons-material/LocalPharmacy';
 import PersonIcon from '@mui/icons-material/Person';
@@ -78,13 +78,6 @@ export default function Login() {
               {busy ? 'Signing in…' : 'Sign In'}
             </Button>
           </form>
-
-          <Divider sx={{ my: 2.5 }} />
-          <Alert severity="info" icon={false} sx={{ '& .MuiAlert-message': { width: '100%' } }}>
-            <Typography variant="subtitle2" sx={{ mb: 0.5 }}>Demo logins</Typography>
-            <Typography variant="body2">👑 Owner — <b>owner</b> / <b>owner123</b></Typography>
-            <Typography variant="body2">🧑‍💼 Staff — <b>staff</b> / <b>staff123</b></Typography>
-          </Alert>
         </CardContent>
       </Card>
     </Box>
