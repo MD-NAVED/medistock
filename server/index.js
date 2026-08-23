@@ -770,6 +770,88 @@ app.get('/api/alerts', requireAuth, async (req, res, next) => {
 });
 
 // ---------------------------------------------------------------------------
+// Khata — the shop's udhaar (credit) book.
+//
+// A customer's balance = credits given - payments/discounts received. The
+// billing screen can open a khata in a single call by passing customer_name:
+// the customer is found (case-insensitive) or created on the spot.
+// ---------------------------------------------------------------------------
+app.get('/api/khata', requireAuth, async (req, res, next) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT c.id, c.name, c.phone, COALESCE(SUM(CASE l.kind WHEN 'credit' THEN l.amount ELSE -l.amount END), 0)::float8 AS balance, COALESCE(SUM(CASE WHEN l.kind = 'credit' THEN l.amount ELSE 0 END), 0)::float8 AS total_credit, COUNT(l.id)::int AS entries, MAX(l.created_at) AS last_entry FROM customers c LEFT JOIN customer_ledger l ON l.customer_id = c.id GROUP BY c.id ORDER BY balance DESC, c.name"
+    );
+    res.json(rows);
+  } catch (e) { next(e); }
+});
+
+app.post('/api/khata/customers', requireAuth, async (req, res, next) => {
+  try {
+    const name = String(req.body?.name || '').trim();
+    const phone = String(req.body?.phone || '').trim();
+    if (!name) return bad(res, 400, 'Customer name is required');
+    const { rows } = await pool.query(
+      'INSERT INTO customers (name, phone) VALUES ($1, $2) RETURNING id, name, phone',
+      [name.slice(0, 200), phone.slice(0, 20)]
+    );
+    res.json(rows[0]);
+  } catch (e) { next(e); }
+});
+
+app.get('/api/khata/customers/:id', requireAuth, async (req, res, next) => {
+  try {
+    const cust = (await pool.query('SELECT id, name, phone, created_at FROM customers WHERE id = $1', [asId(req.params.id)])).rows[0];
+    if (!cust) return bad(res, 404, 'Customer not found');
+
+    const entries = (await pool.query(
+      'SELECT l.id, l.kind, l.amount::float8 AS amount, l.note, l.created_at, l.sale_id, s.invoice_number, u.name AS by_name FROM customer_ledger l LEFT JOIN sales s ON s.id = l.sale_id LEFT JOIN users u ON u.id = l.user_id WHERE l.customer_id = $1 ORDER BY l.id DESC LIMIT 200',
+      [cust.id]
+    )).rows;
+
+    const balance = (await pool.query(
+      "SELECT COALESCE(SUM(CASE kind WHEN 'credit' THEN amount ELSE -amount END), 0)::float8 AS balance FROM customer_ledger WHERE customer_id = $1",
+      [cust.id]
+    )).rows[0].balance;
+
+    res.json({ ...cust, balance, entries });
+  } catch (e) { next(e); }
+});
+
+// Add a ledger entry. Body: { kind: 'credit'|'payment'|'discount', amount,
+// note?, sale_id?, customer_id? | customer_name? } — when only a name is
+// given the customer is matched case-insensitively or created, so billing
+// needs exactly one call to put a bill on khata.
+app.post('/api/khata/entries', requireAuth, async (req, res, next) => {
+  try {
+    const { kind, sale_id, customer_id, customer_name } = req.body || {};
+    const amount = Number(req.body?.amount);
+    const note = String(req.body?.note || '').trim();
+    if (kind !== 'credit' && kind !== 'payment' && kind !== 'discount') {
+      return bad(res, 400, 'Kind must be credit, payment or discount');
+    }
+    if (!Number.isFinite(amount) || amount <= 0) return bad(res, 400, 'Amount must be a positive number');
+
+    let cid = asId(customer_id);
+    if (!cid) {
+      const nm = String(customer_name || '').trim();
+      if (!nm) return bad(res, 400, 'Pick a customer or write a name');
+      const existing = (await pool.query('SELECT id FROM customers WHERE LOWER(name) = LOWER($1)', [nm.slice(0, 200)])).rows[0];
+      cid = existing
+        ? existing.id
+        : (await pool.query("INSERT INTO customers (name, phone) VALUES ($1, '') RETURNING id", [nm.slice(0, 200)])).rows[0].id;
+    } else if (!(await pool.query('SELECT id FROM customers WHERE id = $1', [cid])).rows[0]) {
+      return bad(res, 404, 'Customer not found');
+    }
+
+    const { rows } = await pool.query(
+      'INSERT INTO customer_ledger (customer_id, sale_id, kind, amount, note, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, customer_id, kind, amount',
+      [cid, asId(sale_id) || null, kind, Math.round(amount * 100) / 100, note.slice(0, 300), req.user.id]
+    );
+    res.json(rows[0]);
+  } catch (e) { next(e); }
+});
+
+// ---------------------------------------------------------------------------
 // WhatsApp daily summary
 //
 // The dashboard's "WhatsApp Summary" button turns today's numbers into a
@@ -779,7 +861,7 @@ app.get('/api/alerts', requireAuth, async (req, res, next) => {
 // ---------------------------------------------------------------------------
 app.get('/api/whatsapp/summary', requireAuth, async (req, res, next) => {
   try {
-    const [today, purchases, month, low, expiring, settings] = await Promise.all([
+    const [today, purchases, month, low, expiring, khata, settings] = await Promise.all([
       pool.query(
         "SELECT COUNT(DISTINCT s.id)::int AS bills, COALESCE(SUM((si.quantity - si.returned_qty) * si.unit_price * (1 + COALESCE(si.gst_rate,0)/100.0)), 0)::float8 AS revenue, COALESCE(SUM((si.unit_price - si.cost_price) * (si.quantity - si.returned_qty)), 0)::float8 AS profit FROM sales s LEFT JOIN sale_items si ON si.sale_id = s.id WHERE s.created_at::date = CURRENT_DATE AND s.status != 'cancelled'"
       ),
@@ -794,6 +876,9 @@ app.get('/api/whatsapp/summary', requireAuth, async (req, res, next) => {
       ),
       pool.query(
         'SELECT m.name, b.batch_number, (b.expiry_date - CURRENT_DATE) AS days_left FROM batches b JOIN medicines m ON m.id = b.medicine_id WHERE b.quantity > 0 AND b.expiry_date <= CURRENT_DATE + 90 ORDER BY b.expiry_date ASC'
+      ),
+      pool.query(
+        "SELECT COALESCE(SUM(CASE WHEN bal > 0 THEN bal ELSE 0 END), 0)::float8 AS due, COUNT(*) FILTER (WHERE bal > 0.004)::int AS customers FROM (SELECT c.id, COALESCE(SUM(CASE l.kind WHEN 'credit' THEN l.amount ELSE -l.amount END), 0)::float8 AS bal FROM customers c LEFT JOIN customer_ledger l ON l.customer_id = c.id GROUP BY c.id) t"
       ),
       pool.query('SELECT store_name FROM settings WHERE id = 1'),
     ]);
@@ -825,6 +910,8 @@ app.get('/api/whatsapp/summary', requireAuth, async (req, res, next) => {
     }
     lines.push('');
     lines.push(`📊 *Is mahine ki sale:* ${inr(mo.revenue)} (${mo.bills} bill)`);
+    const k = khata.rows[0];
+    if (k.due > 0) lines.push(`📒 *Khata baiki:* ${inr(k.due)} (${k.customers} customer)`);
     lines.push('');
     lines.push('🤖 MediStock app se');
 

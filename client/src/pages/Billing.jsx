@@ -3,7 +3,7 @@ import {
   Box, Typography, Paper, TextField, Button, Autocomplete, Table, TableBody,
   TableCell, TableContainer, TableHead, TableRow, IconButton, Chip, Dialog,
   DialogTitle, DialogContent, DialogActions, Divider, Snackbar, Alert, InputAdornment,
-  useMediaQuery,
+  Checkbox, FormControlLabel, useMediaQuery,
 } from '@mui/material';
 import AddShoppingCartIcon from '@mui/icons-material/AddShoppingCart';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -22,6 +22,8 @@ export default function Billing() {
   const [qty, setQty] = useState(1);
   const [cart, setCart] = useState([]);
   const [customer, setCustomer] = useState('');
+  const [udhaar, setUdhaar] = useState(false);
+  const [udhaarAmt, setUdhaarAmt] = useState('');
   const [busy, setBusy] = useState(false);
   const [snack, setSnack] = useState(null);
   const [invoice, setInvoice] = useState(null); // {sale, items} after success
@@ -39,6 +41,12 @@ export default function Billing() {
     const gst = gstOn ? cart.reduce((s, c) => s + (c.qty * c.price * c.gst_rate) / 100, 0) : 0;
     return { subtotal, gst, total: subtotal + gst };
   }, [cart, gstOn]);
+
+  // While udhaar is ticked, the pending amount tracks the bill total until
+  // the counter staff edits it (part-payment: they type the lesser amount).
+  useEffect(() => {
+    if (udhaar) setUdhaarAmt(totals.total.toFixed(2));
+  }, [udhaar, totals.total]);
 
   const addToCart = () => {
     if (!selected) return;
@@ -58,15 +66,44 @@ export default function Billing() {
   };
 
   const completeSale = async () => {
+    if (udhaar && !(Number(udhaarAmt) > 0)) {
+      setSnack({ severity: 'warning', message: 'Udhaar amount likho (0 se zyada)' });
+      return;
+    }
+    if (udhaar && !customer.trim()) {
+      setSnack({ severity: 'warning', message: 'Udhaar ke liye customer ka naam likho' });
+      return;
+    }
     setBusy(true);
     try {
       const data = await api('/api/sales', {
         method: 'POST',
         body: { customer_name: customer, items: cart.map((c) => ({ medicine_id: c.id, quantity: c.qty })) },
       });
+      // Bill is already saved — a failed khata entry must never lose the sale,
+      // so it is reported as a warning instead of throwing.
+      if (udhaar) {
+        try {
+          await api('/api/khata/entries', {
+            method: 'POST',
+            body: {
+              customer_name: customer.trim(),
+              kind: 'credit',
+              amount: Number(udhaarAmt),
+              note: 'Bill ' + data.sale.invoice_number,
+              sale_id: data.sale.id,
+            },
+          });
+          setSnack({ severity: 'success', message: `Khata me ${fmt(Number(udhaarAmt))} udhaar likha gaya (${customer.trim()})` });
+        } catch (err) {
+          setSnack({ severity: 'warning', message: 'Bill ban gaya, par khata entry fail: ' + err.message });
+        }
+      }
       setInvoice(data);
       setCart([]);
       setCustomer('');
+      setUdhaar(false);
+      setUdhaarAmt('');
       loadMedicines();
     } catch (e) {
       setSnack({ severity: 'error', message: e.message });
@@ -211,7 +248,22 @@ export default function Billing() {
         {/* RIGHT: summary */}
         <Paper sx={{ p: { xs: 2, md: 3 }, width: { xs: '100%', md: 330 }, position: { xs: 'static', md: 'sticky' }, top: 90 }}>
           <Typography variant="h6" sx={{ mb: 2 }}>Bill Summary</Typography>
-          <TextField label="Customer name (optional)" size="small" fullWidth value={customer} onChange={(e) => setCustomer(e.target.value)} sx={{ mb: 2.5 }} />
+          <TextField label="Customer name (optional)" size="small" fullWidth value={customer} onChange={(e) => setCustomer(e.target.value)} sx={{ mb: 1.5 }} />
+          <FormControlLabel
+            control={<Checkbox checked={udhaar} onChange={(e) => setUdhaar(e.target.checked)} size="small" />}
+            label={<Typography variant="body2">Udhaar — baaki rakha (khata)</Typography>}
+            sx={{ mb: udhaar ? 1.5 : 2.5, display: 'flex' }}
+          />
+          {udhaar && (
+            <TextField
+              size="small" fullWidth type="number" label="Kitna baiki? (udhaar amount)" value={udhaarAmt}
+              onChange={(e) => setUdhaarAmt(e.target.value)}
+              inputProps={{ min: 1, step: '0.01', max: Math.ceil(totals.total) }}
+              InputProps={{ startAdornment: <InputAdornment position="start">₹</InputAdornment> }}
+              helperText="Poora ya part payment — customer ke khata me chala jayega"
+              sx={{ mb: 2.5 }}
+            />
+          )}
           <Box sx={{ display: 'flex', justifyContent: 'space-between', py: 0.7 }}>
             <Typography color="text.secondary">Items</Typography>
             <Typography>{cart.reduce((s, c) => s + c.qty, 0)}</Typography>

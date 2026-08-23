@@ -120,6 +120,9 @@ old in-app backup buttons are gone because serverless has no local disk.
 - Sales chart — last 7 days
 - Top sellers ranking
 - Alert summaries (low stock + expiring medicines)
+- **WhatsApp Summary button** — one tap builds today's hisaab (sale, profit, purchases,
+  low stock, expiry, khata baiki, month-to-date) and opens WhatsApp with the message
+  ready to send. No WhatsApp API account needed, zero per-message cost
 
 ### 🧾 Billing (New Sale)
 - Search medicines by name or company — fast autocomplete
@@ -128,6 +131,20 @@ old in-app backup buttons are gone because serverless has no local disk.
 - **Automatic stock deduction**: stock updates the instant a bill is saved
 - **Print bill**: professional printed invoice with store details, GST, line items
 - GST toggleable per store (in Settings)
+- **Udhaar (credit) from the bill itself**: tick "Udhaar — baaki rakha", enter how much is
+  pending (defaults to the full total, part-payment works too) and the amount lands in the
+  customer's khata automatically, linked to the bill number
+
+### 📒 Khata — Udhaar Book
+The shop's credit notebook, moved into the app:
+- Customer-wise pending balance (**baiki**), total credit ever given, entry count, last activity
+- Three entry kinds: **Udhaar Diya** (credit given), **Payment Aaya** (money received),
+  **Maaf Kiya** (discount/waiver)
+- Full per-customer ledger with dates, notes, linked bill numbers and which staff member made
+  the entry — so udhaar can't quietly disappear
+- One-tap "Payment Aaya" pre-fills the exact pending amount
+- The **WhatsApp Summary** includes total khata baiki, so pending credit reaches the owner's
+  pocket every evening along with sales and stock alerts
 
 ### ↩️ Corrections — cancel a bill or take items back
 Every bill in **Reports** opens a detail view with the two corrections a counter actually needs.

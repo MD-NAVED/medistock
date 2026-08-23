@@ -204,12 +204,36 @@ CREATE TABLE IF NOT EXISTS login_attempts (
 );
 
 -- ----------------------------------------------------------------------------
+-- 14. Khata Customers (Udhaar / credit book)
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS customers (
+  id          SERIAL PRIMARY KEY,
+  name        TEXT NOT NULL,
+  phone       VARCHAR(20) NOT NULL DEFAULT '',
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- kind: 'credit' = udhaar diya (balance badha), 'payment' = paisa mila,
+--       'discount' = maaf kiya (balance ghata). balance = credits - others.
+CREATE TABLE IF NOT EXISTS customer_ledger (
+  id          SERIAL PRIMARY KEY,
+  customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  sale_id     INTEGER REFERENCES sales(id),
+  kind        VARCHAR(20) NOT NULL,
+  amount      NUMERIC(12, 2) NOT NULL,
+  note        TEXT NOT NULL DEFAULT '',
+  user_id     INTEGER NOT NULL REFERENCES users(id),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ----------------------------------------------------------------------------
 -- Performance Indexes
 -- ----------------------------------------------------------------------------
 CREATE INDEX IF NOT EXISTS idx_batches_medicine ON batches(medicine_id);
 CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items(sale_id);
 CREATE INDEX IF NOT EXISTS idx_sales_created ON sales(created_at);
 CREATE INDEX IF NOT EXISTS idx_login_attempts_user ON login_attempts(username, created_at);
+CREATE INDEX IF NOT EXISTS idx_customer_ledger_customer ON customer_ledger(customer_id);
 
 -- ----------------------------------------------------------------------------
 -- Seed Store Settings (Default)

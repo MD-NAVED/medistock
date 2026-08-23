@@ -8,6 +8,7 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Medicines from './pages/Medicines';
 import Billing from './pages/Billing';
+import Khata from './pages/Khata';
 import Purchases from './pages/Purchases';
 import Alerts from './pages/Alerts';
 import Reports from './pages/Reports';
@@ -24,7 +25,8 @@ export default function App() {
             <Route element={<RequireAuth />}>
               <Route path="/" element={<AppLayout />}>
                 <Route index element={<Dashboard />} />
-                <Route path="billing" element={<Billing />} />
+                    <Route path="billing" element={<Billing />} />
+                    <Route path="khata" element={<Khata />} />
                 <Route path="medicines" element={<Medicines />} />
                 <Route path="purchases" element={<Purchases />} />
                 <Route path="alerts" element={<Alerts />} />
