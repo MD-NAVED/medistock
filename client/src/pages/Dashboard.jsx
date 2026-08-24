@@ -51,7 +51,7 @@ export default function Dashboard() {
     setWaBusy(true);
     try {
       const d = await api('/api/whatsapp/summary');
-      window.open('https://wa.me/?text=' + encodeURIComponent(d.text), '_blank');
+      window.open('https://api.whatsapp.com/send?text=' + encodeURIComponent(d.text), '_blank');
     } catch (e) {
       setError(e.message);
     }

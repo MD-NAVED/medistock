@@ -890,30 +890,45 @@ app.get('/api/whatsapp/summary', requireAuth, async (req, res, next) => {
     const inr = (n) => '₹' + Math.round(Number(n)).toLocaleString('en-IN');
 
     const lines = [];
-    lines.push(`💊 *${store} — Roz ka Hisaab*`);
-    lines.push(`📅 ${new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`);
-    lines.push('');
-    lines.push(`💰 *Aaj ki Sale:* ${inr(t.revenue)} (${t.bills} bill)`);
-    lines.push(`📈 *Aaj ka Munafa:* ${inr(t.profit)}`);
-    if (p.bills > 0) lines.push(`🛒 *Aaj ki Purchase:* ${inr(p.amount)} (${p.bills} bill)`);
-    lines.push('');
-    if (low.rows.length > 0) {
-      const extra = low.rows.length > 5 ? ` +${low.rows.length - 5} aur` : '';
-      lines.push(`⚠️ *Stock kam (${low.rows.length}):* ${low.rows.slice(0, 5).map((r) => r.name).join(', ')}${extra}`);
+    lines.push(`🏥 *${store}* — *Daily Business Summary*`);
+    lines.push(`📅 *Date:* ${new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`);
+    lines.push('━━━━━━━━━━━━━━━━━━━━━');
+    lines.push('💵 *TODAY\'S PERFORMANCE*');
+    lines.push(`• 💰 *Sales:* ${inr(t.revenue)} *(${t.bills} ${t.bills === 1 ? 'bill' : 'bills'})*`);
+    lines.push(`• 📈 *Gross Profit:* ${inr(t.profit)}`);
+    if (p.bills > 0) {
+      lines.push(`• 🛒 *Purchases:* ${inr(p.amount)} *(${p.bills} ${p.bills === 1 ? 'bill' : 'bills'})*`);
     }
-    if (expiring.rows.length > 0) {
-      const top = expiring.rows.slice(0, 3)
-        .map((r) => `${r.name} (${r.days_left < 0 ? 'EXPIRED' : r.days_left + ' din'})`)
-        .join(', ');
-      const extra = expiring.rows.length > 3 ? ` +${expiring.rows.length - 3} aur` : '';
-      lines.push(`⏳ *Expiry 90 din me (${expiring.rows.length}):* ${top}${extra}`);
-    }
-    lines.push('');
-    lines.push(`📊 *Is mahine ki sale:* ${inr(mo.revenue)} (${mo.bills} bill)`);
+
     const k = khata.rows[0];
-    if (k.due > 0) lines.push(`📒 *Khata baiki:* ${inr(k.due)} (${k.customers} customer)`);
     lines.push('');
-    lines.push('🤖 MediStock app se');
+    lines.push('📒 *CREDIT BOOK (KHATA)*');
+    lines.push(`• 🔴 *Pending Dues:* ${inr(k.due)} *(${k.customers} ${k.customers === 1 ? 'customer' : 'customers'})*`);
+
+    if (low.rows.length > 0 || expiring.rows.length > 0) {
+      lines.push('');
+      lines.push('⚠️ *INVENTORY ALERTS*');
+      if (low.rows.length > 0) {
+        lines.push(`• 🔻 *Low Stock (${low.rows.length}):*`);
+        low.rows.slice(0, 5).forEach((r) => lines.push(`   - ${r.name}`));
+        if (low.rows.length > 5) lines.push(`   _+${low.rows.length - 5} more_`);
+      }
+      if (expiring.rows.length > 0) {
+        lines.push(`• ⏳ *Expiring Soon (${expiring.rows.length}):*`);
+        expiring.rows.slice(0, 4).forEach((r) => {
+          const daysStr = r.days_left < 0 ? 'EXPIRED' : `in ${r.days_left} days`;
+          lines.push(`   - ${r.name} *(${daysStr})*`);
+        });
+        if (expiring.rows.length > 4) lines.push(`   _+${expiring.rows.length - 4} more_`);
+      }
+    }
+
+    lines.push('');
+    lines.push('📊 *THIS MONTH TOTAL*');
+    lines.push(`• 📈 *Monthly Revenue:* ${inr(mo.revenue)} *(${mo.bills} ${mo.bills === 1 ? 'bill' : 'bills'})*`);
+
+    lines.push('━━━━━━━━━━━━━━━━━━━━━');
+    lines.push('✨ _Generated automatically via MediStock App_');
 
     res.json({
       text: lines.join('\n'),
