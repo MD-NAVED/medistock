@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import {
   Box, Typography, Button, Paper, Snackbar, Alert, Dialog, DialogTitle,
   DialogContent, DialogActions, TextField, MenuItem, Autocomplete, IconButton,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Chip, Divider,
-  useMediaQuery, Tooltip, CircularProgress,
+  useMediaQuery, Tooltip, CircularProgress, LinearProgress, Stack,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import AddIcon from '@mui/icons-material/Add';
@@ -11,9 +11,12 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import SaveIcon from '@mui/icons-material/Save';
 import UndoIcon from '@mui/icons-material/Undo';
 import EditIcon from '@mui/icons-material/Edit';
+import PhotoCameraIcon from '@mui/icons-material/PhotoCamera';
+import DocumentScannerIcon from '@mui/icons-material/DocumentScanner';
 import { api } from '../api';
 import { useAuth } from '../auth';
 import { fmt, fmtDate, fmtDateTime, todayStr } from '../utils';
+import { parseInvoiceImage } from '../utils/invoiceParser';
 
 const EMPTY_LINE = { medicine_id: null, batch_number: '', expiry_date: '', quantity: '', buy_price: '' };
 const EMPTY_HEAD = { supplier_name: '', invoice_number: '', date: '' };
@@ -71,6 +74,62 @@ export default function Purchases() {
   const [editHead, setEditHead] = useState({ ...EMPTY_HEAD });
   const [editLines, setEditLines] = useState([{ ...EMPTY_LINE }]);
 
+  // Camera & Image Invoice Scanner
+  const [scanBusy, setScanBusy] = useState(false);
+  const [scanProgress, setScanProgress] = useState(0);
+  const [scanStatus, setScanStatus] = useState('');
+  const [scannedNotice, setScannedNotice] = useState(false);
+  const fileInputRef = useRef(null);
+
+  const handleScanInvoice = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+
+    setScanBusy(true);
+    setScanProgress(5);
+    setScanStatus('Loading invoice image…');
+
+    try {
+      let medList = medicines;
+      if (!medList.length) {
+        medList = await api('/api/medicines');
+        setMedicines(medList);
+      }
+
+      const parsed = await parseInvoiceImage(file, medList, (status, pct) => {
+        setScanStatus(status);
+        setScanProgress(pct);
+      });
+
+      setHead({
+        supplier_name: parsed.supplier_name || '',
+        invoice_number: parsed.invoice_number || '',
+        date: parsed.date || todayStr(),
+      });
+
+      if (parsed.items && parsed.items.length > 0) {
+        setLines(parsed.items.map((it) => ({
+          medicine_id: it.medicine_id,
+          batch_number: it.batch_number,
+          expiry_date: it.expiry_date,
+          quantity: it.quantity,
+          buy_price: it.buy_price,
+        })));
+      } else {
+        setLines([{ ...EMPTY_LINE }]);
+      }
+
+      setScannedNotice(true);
+      setOpen(true);
+      setSnack({ severity: 'success', message: 'Invoice scanned! Pre-filled purchase details below for review.' });
+    } catch (err) {
+      setSnack({ severity: 'error', message: err.message || 'Invoice scan failed. Please enter details manually.' });
+    } finally {
+      setScanBusy(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
   const load = () => {
     api('/api/purchases').then(setRows).catch((e) => setSnack({ severity: 'error', message: e.message }));
   };
@@ -110,6 +169,7 @@ export default function Purchases() {
   const openDialog = () => {
     setHead({ supplier_name: '', invoice_number: '', date: todayStr() });
     setLines([{ ...EMPTY_LINE }]);
+    setScannedNotice(false);
     setOpen(true);
     api('/api/medicines').then(setMedicines).catch(() => {});
   };
@@ -222,13 +282,34 @@ export default function Purchases() {
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 2, flexWrap: 'wrap', gap: { xs: 1.5, md: 2 } }}>
         <Typography variant="h5" sx={{ flexGrow: 1, fontSize: { xs: 20, md: 24 } }}>Purchases — Stock In</Typography>
+        
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          style={{ display: 'none' }}
+          onChange={handleScanInvoice}
+        />
+
+        <Button
+          variant="contained"
+          color="secondary"
+          startIcon={<PhotoCameraIcon />}
+          onClick={() => fileInputRef.current?.click()}
+          disabled={scanBusy}
+          sx={{ whiteSpace: 'nowrap', bgcolor: '#7b1fa2', '&:hover': { bgcolor: '#6a1b9a' } }}
+        >
+          {scanBusy ? 'Scanning…' : (isMobile ? 'Scan Invoice' : 'Scan Bill (Camera/Image)')}
+        </Button>
+
         <Button variant="contained" startIcon={<AddIcon />} onClick={openDialog} sx={{ whiteSpace: 'nowrap' }}>
-          {isMobile ? 'New Entry' : 'New Purchase Entry'}
+          {isMobile ? 'Manual Entry' : 'Manual Purchase Entry'}
         </Button>
       </Box>
 
-      <Alert severity="info" sx={{ mb: 2 }}>
-        📷 Camera invoice scanning comes in a future update — for now enter purchases below and stock updates <b>automatically</b>.
+      <Alert severity="success" icon={<DocumentScannerIcon />} sx={{ mb: 2 }}>
+        📷 <b>Smart Camera Invoice Scanning Enabled</b>: Take a photo or upload a supplier bill to automatically extract items, batches & prices for review.
       </Alert>
 
       {isMobile ? (
@@ -360,9 +441,27 @@ export default function Purchases() {
         </DialogActions>
       </Dialog>
 
+      {/* Invoice Scanning Progress Dialog */}
+      <Dialog open={scanBusy} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ textAlign: 'center', pb: 1 }}>Scanning Invoice…</DialogTitle>
+        <DialogContent sx={{ textAlign: 'center', py: 3 }}>
+          <CircularProgress size={48} sx={{ mb: 2, color: '#7b1fa2' }} />
+          <Typography variant="body1" sx={{ fontWeight: 600, mb: 1 }}>{scanStatus}</Typography>
+          <LinearProgress variant="determinate" value={scanProgress} sx={{ height: 8, borderRadius: 4, bgcolor: '#f3e5f5', '& .MuiLinearProgress-bar': { bgcolor: '#7b1fa2' } }} />
+          <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+            Extracting supplier, medicines, batch numbers & prices…
+          </Typography>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={open} onClose={() => setOpen(false)} maxWidth="md" fullWidth fullScreen={isMobile}>
         <DialogTitle>New Purchase — add stock by batch</DialogTitle>
         <DialogContent sx={{ pt: '8px !important' }}>
+          {scannedNotice && (
+            <Alert severity="info" sx={{ mb: 2, mt: 1 }}>
+              ✨ <b>Scanned from Invoice</b>: Supplier details, batch numbers, quantities, and prices pre-filled below. Please review and adjust any field before saving to update stock.
+            </Alert>
+          )}
           <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 2, mt: 1 }}>
             <TextField label="Supplier Name" value={head.supplier_name} onChange={(e) => setHead({ ...head, supplier_name: e.target.value })} />
             <TextField label="Supplier Invoice No. (optional)" value={head.invoice_number} onChange={(e) => setHead({ ...head, invoice_number: e.target.value })} />
