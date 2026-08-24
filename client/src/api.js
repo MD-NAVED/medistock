@@ -1,6 +1,12 @@
+const isNative = window.location.protocol === 'capacitor:' || window.location.protocol === 'file:';
+const API_BASE = isNative
+  ? (import.meta.env.VITE_API_BASE || 'https://medistock-iu96.vercel.app')
+  : '';
+
 export async function api(path, { method = 'GET', body } = {}) {
   const token = localStorage.getItem('medistock_token');
-  const res = await fetch(path, {
+  const fullUrl = path.startsWith('http') ? path : (API_BASE + path);
+  const res = await fetch(fullUrl, {
     method,
     headers: {
       'Content-Type': 'application/json',

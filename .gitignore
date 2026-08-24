@@ -24,6 +24,12 @@ Thumbs.db
 
 # Logs
 *.log
+*.mp4
+
+# Capacitor Android build artifacts
+client/android/app/build/
+client/android/.gradle/
+client/android/app/src/main/assets/public/
 
 # Local test harness throwaway Postgres cluster + staged migration
 .local-pg/

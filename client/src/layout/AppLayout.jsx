@@ -200,8 +200,27 @@ export default function AppLayout() {
           <InstallMobileIcon color="primary" /> Install MediStock App
         </DialogTitle>
         <DialogContent dividers>
+          <Box sx={{ mb: 2, p: 2, bgcolor: '#e8f5e9', borderRadius: 2, border: '1px solid #c8e6c9', textAlign: 'center' }}>
+            <Typography variant="subtitle2" sx={{ fontWeight: 800, color: 'success.dark', mb: 1 }}>
+              📦 Direct Android APK File Download
+            </Typography>
+            <Button
+              variant="contained"
+              color="success"
+              startIcon={<InstallMobileIcon />}
+              href="/MediStock.apk"
+              download="MediStock.apk"
+              fullWidth
+              sx={{ fontWeight: 700, py: 1 }}
+            >
+              Download MediStock.apk (4.4 MB)
+            </Button>
+          </Box>
+
+          <Divider sx={{ my: 1.5 }} />
+
           <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5, color: 'primary.main' }}>
-            🤖 Android (Chrome / Edge):
+            🤖 Android Chrome PWA Install:
           </Typography>
           <Typography variant="body2" paragraph>
             1. Tap browser menu (<b>3 dots ⋮</b> at top right).<br />
