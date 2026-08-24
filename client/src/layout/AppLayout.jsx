@@ -62,7 +62,7 @@ export default function AppLayout() {
   const nav = [
     { label: 'Dashboard', icon: <SpaceDashboardIcon />, to: '/' },
     { label: 'Billing (New Sale)', icon: <PointOfSaleIcon />, to: '/billing' },
-    { label: 'Khata (Udhaar)', icon: <MenuBookIcon />, to: '/khata' },
+    { label: 'Credit Book (Khata)', icon: <MenuBookIcon />, to: '/khata' },
     { label: 'Medicines', icon: <MedicationIcon />, to: '/medicines' },
     { label: 'Purchases (Stock In)', icon: <ShoppingCartIcon />, to: '/purchases' },
     { label: 'Alerts', icon: <NotificationsActiveIcon />, to: '/alerts', badge: alertCount },

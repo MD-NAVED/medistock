@@ -12,15 +12,15 @@ import { api } from '../api';
 import { fmt, fmtDate, fmtDateTime } from '../utils';
 
 const KINDS = [
-  { value: 'credit', label: 'Udhaar Diya (credit)' },
-  { value: 'payment', label: 'Payment Aaya' },
-  { value: 'discount', label: 'Maaf Kiya (discount)' },
+  { value: 'credit', label: 'Credit Given (Udhaar)' },
+  { value: 'payment', label: 'Payment Received' },
+  { value: 'discount', label: 'Discount / Waiver' },
 ];
 
 const kindChip = (kind) => {
-  if (kind === 'credit') return <Chip size="small" color="error" variant="outlined" label="Udhaar" />;
+  if (kind === 'credit') return <Chip size="small" color="error" variant="outlined" label="Credit" />;
   if (kind === 'payment') return <Chip size="small" color="success" variant="outlined" label="Payment" />;
-  return <Chip size="small" color="info" variant="outlined" label="Maaf" />;
+  return <Chip size="small" color="info" variant="outlined" label="Discount" />;
 };
 
 export default function Khata() {
@@ -48,7 +48,7 @@ export default function Khata() {
     try {
       await api('/api/khata/customers', { method: 'POST', body: { name: newCust.name, phone: newCust.phone || '' } });
       setNewCust(null);
-      setSnack({ severity: 'success', message: 'Customer khata me add ho gaya' });
+      setSnack({ severity: 'success', message: 'Customer added to Credit Book' });
       load();
     } catch (e) {
       setSnack({ severity: 'error', message: e.message });
@@ -67,7 +67,7 @@ export default function Khata() {
         },
       });
       setEntry(null);
-      setSnack({ severity: 'success', message: 'Khata entry save ho gayi' });
+      setSnack({ severity: 'success', message: 'Ledger entry saved' });
       load();
       if (detail) openDetail(detail.id);
     } catch (e) {
@@ -76,7 +76,7 @@ export default function Khata() {
   };
 
   if (error) return <Alert severity="error">{error}</Alert>;
-  if (!rows) return <Typography color="text.secondary" sx={{ py: 6, textAlign: 'center' }}>Loading khata…</Typography>;
+  if (!rows) return <Typography color="text.secondary" sx={{ py: 6, textAlign: 'center' }}>Loading ledger…</Typography>;
 
   const totalDue = rows.reduce((s, r) => s + Math.max(0, r.balance), 0);
   const dueCount = rows.filter((r) => r.balance > 0.004).length;
@@ -84,19 +84,19 @@ export default function Khata() {
   return (
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1.5, mb: 3 }}>
-        <Typography variant="h5">Khata — Udhaar Book</Typography>
+        <Typography variant="h5">Credit Book (Khata)</Typography>
         <Button variant="contained" startIcon={<PersonAddAlt1Icon />} onClick={() => setNewCust({ name: '', phone: '' })}>
-          Naya Customer
+          New Customer
         </Button>
       </Box>
 
       <Paper sx={{ p: 2, mb: 3, display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
         <MenuBookIcon color="primary" />
         <Typography sx={{ fontWeight: 700 }}>
-          Kul Baiki (total pending): <Box component="span" color={totalDue > 0 ? 'error.main' : 'success.main'}>{fmt(totalDue)}</Box>
+          Total Pending Balance: <Box component="span" color={totalDue > 0 ? 'error.main' : 'success.main'}>{fmt(totalDue)}</Box>
         </Typography>
-        <Chip size="small" label={`${rows.length} customer`} variant="outlined" />
-        {dueCount > 0 && <Chip size="small" color="error" variant="outlined" label={`${dueCount} se baaki hai`} />}
+        <Chip size="small" label={`${rows.length} ${rows.length === 1 ? 'customer' : 'customers'}`} variant="outlined" />
+        {dueCount > 0 && <Chip size="small" color="error" variant="outlined" label={`${dueCount} with pending dues`} />}
       </Paper>
 
       <TableContainer component={Paper}>
@@ -104,8 +104,8 @@ export default function Khata() {
           <TableHead>
             <TableRow sx={{ bgcolor: '#f6f9f8' }}>
               <TableCell>Customer</TableCell>
-              <TableCell align="right">Baiki (pending)</TableCell>
-              <TableCell align="right" sx={{ display: { xs: 'none', sm: 'table-cell' } }}>Total Udhaar</TableCell>
+              <TableCell align="right">Pending Dues</TableCell>
+              <TableCell align="right" sx={{ display: { xs: 'none', sm: 'table-cell' } }}>Total Credit</TableCell>
               <TableCell align="right" sx={{ display: { xs: 'none', sm: 'table-cell' } }}>Entries</TableCell>
               <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>Last Entry</TableCell>
               <TableCell align="right">Actions</TableCell>
@@ -116,7 +116,7 @@ export default function Khata() {
               <TableRow>
                 <TableCell colSpan={6}>
                   <Typography color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>
-                    Khata khaali hai — billing pe "Udhaar" tick karke ya "Naya Customer" se shuru karo 📖
+                    Credit Book is empty — check "Record on Credit" during billing or click "New Customer" to start 📖
                   </Typography>
                 </TableCell>
               </TableRow>
@@ -151,9 +151,9 @@ export default function Khata() {
 
       {/* New customer dialog */}
       <Dialog open={!!newCust} onClose={() => setNewCust(null)} maxWidth="xs" fullWidth>
-        <DialogTitle>Naya Customer (Khata)</DialogTitle>
+        <DialogTitle>New Customer (Credit Book)</DialogTitle>
         <DialogContent sx={{ pt: '16px !important' }}>
-          <TextField autoFocus fullWidth label="Customer ka naam" value={newCust?.name || ''}
+          <TextField autoFocus fullWidth label="Customer Name" value={newCust?.name || ''}
             onChange={(e) => setNewCust({ ...newCust, name: e.target.value })} sx={{ mb: 2 }} />
           <TextField fullWidth label="Phone (optional)" value={newCust?.phone || ''}
             onChange={(e) => setNewCust({ ...newCust, phone: e.target.value })} />
@@ -177,15 +177,15 @@ export default function Khata() {
                 <Typography variant="h5" sx={{ fontWeight: 800, color: detail.balance > 0.004 ? 'error.main' : 'success.main' }}>
                   {fmt(detail.balance)}
                 </Typography>
-                <Typography variant="caption" color="text.secondary">baiki (pending)</Typography>
+                <Typography variant="caption" color="text.secondary">pending balance</Typography>
                 <Box sx={{ flexGrow: 1 }} />
                 <Button size="small" variant="outlined" color="success"
                   onClick={() => setEntry({ customerId: detail.id, name: detail.name, kind: 'payment', amount: Math.max(0, detail.balance).toFixed(2), note: '' })}>
-                  Payment Aaya
+                  Payment Received
                 </Button>
                 <Button size="small" variant="outlined" color="error"
                   onClick={() => setEntry({ customerId: detail.id, name: detail.name, kind: 'credit', amount: '', note: '' })}>
-                  Udhaar Diya
+                  Credit Given
                 </Button>
               </Box>
 
@@ -201,7 +201,7 @@ export default function Khata() {
                   </TableHead>
                   <TableBody>
                     {detail.entries.length === 0 && (
-                      <TableRow><TableCell colSpan={4}><Typography color="text.secondary" sx={{ py: 2, textAlign: 'center' }}>Koi entry nahi hai</Typography></TableCell></TableRow>
+                      <TableRow><TableCell colSpan={4}><Typography color="text.secondary" sx={{ py: 2, textAlign: 'center' }}>No entries found</Typography></TableCell></TableRow>
                     )}
                     {detail.entries.map((e) => (
                       <TableRow key={e.id}>
@@ -230,12 +230,12 @@ export default function Khata() {
 
       {/* Add-entry dialog */}
       <Dialog open={!!entry} onClose={() => setEntry(null)} maxWidth="xs" fullWidth>
-        <DialogTitle>Khata Entry — {entry?.name || 'Naya Customer'}</DialogTitle>
+        <DialogTitle>Ledger Entry — {entry?.name || 'New Customer'}</DialogTitle>
         <DialogContent sx={{ pt: '16px !important' }}>
           {!entry?.customerId && (
-            <TextField autoFocus fullWidth label="Customer ka naam" value={entry?.customerName || ''}
+            <TextField autoFocus fullWidth label="Customer Name" value={entry?.customerName || ''}
               onChange={(e) => setEntry({ ...entry, customerName: e.target.value })} sx={{ mb: 2 }}
-              helperText="Same naam wala customer milega, warna naya ban jayega" />
+              helperText="Matches existing customer by name, or creates a new one" />
           )}
           <TextField select fullWidth label="Type" value={entry?.kind || 'credit'}
             onChange={(e) => setEntry({ ...entry, kind: e.target.value })} sx={{ mb: 2 }}>

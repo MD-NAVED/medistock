@@ -67,11 +67,11 @@ export default function Billing() {
 
   const completeSale = async () => {
     if (udhaar && !(Number(udhaarAmt) > 0)) {
-      setSnack({ severity: 'warning', message: 'Udhaar amount likho (0 se zyada)' });
+      setSnack({ severity: 'warning', message: 'Please enter a valid credit amount (> 0)' });
       return;
     }
     if (udhaar && !customer.trim()) {
-      setSnack({ severity: 'warning', message: 'Udhaar ke liye customer ka naam likho' });
+      setSnack({ severity: 'warning', message: 'Please enter customer name for credit sale' });
       return;
     }
     setBusy(true);
@@ -94,9 +94,9 @@ export default function Billing() {
               sale_id: data.sale.id,
             },
           });
-          setSnack({ severity: 'success', message: `Khata me ${fmt(Number(udhaarAmt))} udhaar likha gaya (${customer.trim()})` });
+          setSnack({ severity: 'success', message: `${fmt(Number(udhaarAmt))} recorded on credit for ${customer.trim()}` });
         } catch (err) {
-          setSnack({ severity: 'warning', message: 'Bill ban gaya, par khata entry fail: ' + err.message });
+          setSnack({ severity: 'warning', message: 'Sale completed, but ledger entry failed: ' + err.message });
         }
       }
       setInvoice(data);
@@ -251,16 +251,16 @@ export default function Billing() {
           <TextField label="Customer name (optional)" size="small" fullWidth value={customer} onChange={(e) => setCustomer(e.target.value)} sx={{ mb: 1.5 }} />
           <FormControlLabel
             control={<Checkbox checked={udhaar} onChange={(e) => setUdhaar(e.target.checked)} size="small" />}
-            label={<Typography variant="body2">Udhaar — baaki rakha (khata)</Typography>}
+            label={<Typography variant="body2">Record on Credit (Khata)</Typography>}
             sx={{ mb: udhaar ? 1.5 : 2.5, display: 'flex' }}
           />
           {udhaar && (
             <TextField
-              size="small" fullWidth type="number" label="Kitna baiki? (udhaar amount)" value={udhaarAmt}
+              size="small" fullWidth type="number" label="Credit Amount" value={udhaarAmt}
               onChange={(e) => setUdhaarAmt(e.target.value)}
               inputProps={{ min: 1, step: '0.01', max: Math.ceil(totals.total) }}
               InputProps={{ startAdornment: <InputAdornment position="start">₹</InputAdornment> }}
-              helperText="Poora ya part payment — customer ke khata me chala jayega"
+              helperText="Full or partial credit — recorded to customer ledger"
               sx={{ mb: 2.5 }}
             />
           )}
