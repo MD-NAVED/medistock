@@ -1,8 +1,28 @@
 const express = require('express');
+const cors = require('cors');
 const crypto = require('crypto');
 const { pool, transaction, addUser, verifyPassword, setUserPassword } = require('./db');
 
 const app = express();
+
+// CORS — allow the deployed frontend origin(s) and local dev
+const allowedOrigins = [
+  'http://localhost:5173',           // Vite dev server
+  'http://localhost:3001',           // Local dev (server serves client)
+  'https://medistock.vercel.app',    // Main Vercel frontend (adjust to your actual domain)
+  'https://medistock-api.vercel.app', // API domain if different
+  /^https:\/\/.*\.vercel\.app$/,     // Any Vercel preview deployment
+];
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true); // server-to-server / curl
+    const ok = allowedOrigins.some(o => o instanceof RegExp ? o.test(origin) : o === origin);
+    callback(ok ? null : new Error('CORS: Origin not allowed'), ok);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
 const SESSION_DAYS = 30;
 const MAX_FAILED_LOGINS = 8;      // per username
 const LOCKOUT_MINUTES = 15;

@@ -10,7 +10,9 @@
     "start": "node server/dev.js",
     "dev": "node server/dev.js",
     "dev:client": "cd client && npm run dev",
-    "test": "node scripts/local-test.js"
+    "test": "node scripts/local-test.js",
+    "build:client": "cd client && npm run build",
+    "build:capacitor": "cd client && npm run build:capacitor"
   },
   "dependencies": {
     "express": "^4.19.2",

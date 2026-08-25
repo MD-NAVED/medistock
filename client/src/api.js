@@ -1,6 +1,7 @@
 const isNative = window.location.protocol === 'capacitor:' || window.location.protocol === 'file:';
+// Use VITE_API_BASE for native (Capacitor) builds, relative for web (same-origin via Vercel rewrites)
 const API_BASE = isNative
-  ? (import.meta.env.VITE_API_BASE || 'https://medistock-iu96.vercel.app')
+  ? (import.meta.env.VITE_API_BASE || '')
   : '';
 
 export async function api(path, { method = 'GET', body } = {}) {

@@ -37,3 +37,6 @@ client/android/app/src/main/assets/public/
 
 # ZCode workspace config
 .zcode/
+
+.vercel
+.env*
