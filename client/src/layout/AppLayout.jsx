@@ -3,6 +3,7 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   AppBar, Toolbar, Typography, IconButton, Box, Chip, Badge, Drawer, Divider,
   List, ListItemButton, ListItemIcon, ListItemText, Tooltip, Avatar,
+  Dialog, DialogTitle, DialogContent, DialogActions, Button,
 } from '@mui/material';
 import MenuIcon from '@mui/icons-material/Menu';
 import LocalPharmacyIcon from '@mui/icons-material/LocalPharmacy';
