@@ -13,38 +13,13 @@ import InventoryIcon from '@mui/icons-material/Inventory2';
 import { api } from '../api';
 import { useAuth } from '../auth';
 import BatchDialog from '../components/BatchDialog';
+import MedicineLogo from '../components/MedicineLogo';
 import { fmt, MEDICINE_TYPES, GST_RATES } from '../utils';
 
 const EMPTY_FORM = {
   name: '', company: '', type: 'Tablet', shelf: '',
-  buy_price: '', sell_price: '', gst_rate: 12, low_stock_threshold: 10, logo_url: '',
+  buy_price: '', sell_price: '', gst_rate: 12, low_stock_threshold: 10,
 };
-
-/** 32px logo with a deterministic first-letter fallback when no image is set. */
-const LOGO_PALETTE = ['#1a73e8', '#e8710a', '#188038', '#c5221f', '#7b1fa2', '#00796b', '#5d4037', '#455a64'];
-function MedicineLogo({ src, text }) {
-  const initial = (text || '?').trim().charAt(0).toUpperCase() || '?';
-  const colorIdx = (initial.charCodeAt(0) || 0) % LOGO_PALETTE.length;
-  const bg = LOGO_PALETTE[colorIdx];
-  if (src) {
-    return (
-      <Box
-        component="img" src={src} alt=""
-        sx={{ width: 32, height: 32, borderRadius: '8px', objectFit: 'contain', flexShrink: 0, bgcolor: '#fff', border: '1px solid #e0e6e4' }}
-        onError={(e) => { e.currentTarget.style.display = 'none'; }}
-      />
-    );
-  }
-  return (
-    <Box sx={{
-      width: 32, height: 32, borderRadius: '8px', flexShrink: 0, bgcolor: bg,
-      color: '#fff', fontWeight: 700, fontSize: 15,
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-    }}>
-      {initial}
-    </Box>
-  );
-}
 
 function stockColor(stock, threshold) {
   if (stock <= 0) return 'error';
@@ -147,7 +122,6 @@ export default function Medicines() {
       name: row.name, company: row.company, type: row.type, shelf: row.shelf,
       buy_price: row.buy_price, sell_price: row.sell_price,
       gst_rate: row.gst_rate, low_stock_threshold: row.low_stock_threshold,
-      logo_url: row.logo_url || '',
     });
     setDialogOpen(true);
   };
@@ -300,17 +274,6 @@ export default function Medicines() {
               {MEDICINE_TYPES.map((t) => <MenuItem key={t} value={t}>{t}</MenuItem>)}
             </TextField>
             <TextField label="Shelf Location (e.g. A1)" value={form.shelf} onChange={(e) => setForm({ ...form, shelf: e.target.value })} />
-            <TextField
-              label="Logo Image URL (optional)"
-              value={form.logo_url}
-              onChange={(e) => setForm({ ...form, logo_url: e.target.value })}
-              placeholder="https://… or paste image URL"
-              InputProps={{
-                startAdornment: form.logo_url ? (
-                  <InputAdornment position="start"><MedicineLogo src={form.logo_url} text={form.company || form.name || 'M'} /></InputAdornment>
-                ) : null,
-              }}
-            />
             <TextField label="Buy Price (₹)" type="number" inputProps={{ min: 0, step: '0.01' }} value={form.buy_price} onChange={(e) => setForm({ ...form, buy_price: e.target.value })} />
             <TextField label="Sell Price (₹) *" type="number" inputProps={{ min: 0, step: '0.01' }} value={form.sell_price} onChange={(e) => setForm({ ...form, sell_price: e.target.value })} />
             <TextField select label="GST Rate %" value={form.gst_rate} onChange={(e) => setForm({ ...form, gst_rate: e.target.value })}>

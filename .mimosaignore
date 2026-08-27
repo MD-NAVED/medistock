@@ -1,0 +1,9 @@
+# Ignore minified/compiled build artefacts — not hand-written code
+client/android/**
+client/dist/**
+client/public/*.apk
+**/android/app/src/main/assets/public/**
+**/android/**
+**/dist/**
+**/index-*.js
+**/*.min.js

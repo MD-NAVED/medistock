@@ -48,6 +48,28 @@ const bad = (res, code, msg) => res.status(code).json({ error: msg });
 // Route params used as ids are converted to numbers before touching the db.
 const asId = (v) => { const n = Number(v); return Number.isInteger(n) && n > 0 ? n : 0; };
 
+// Normalize a company/brand name for matching: lowercase, & -> space, keep
+// only a-z0-9, collapse spaces to dashes. Used everywhere a medicine's company
+// is matched against the `companies` brand-logo directory.
+const slugify = (s) => String(s || '')
+  .toLowerCase()
+  .replace(/&/g, ' ')
+  .replace(/[^a-z0-9]+/g, ' ')
+  .trim()
+  .replace(/\s+/g, '-');
+
+/** Find the logo for a company name from the `companies` directory (or null). */
+async function resolveCompanyLogo(companyName) {
+  const key = slugify(companyName);
+  if (!key) return null;
+  const { rows } = await pool.query('SELECT name, aliases, logo_url FROM companies');
+  for (const c of rows) {
+    const keys = [c.name, ...String(c.aliases || '').split(',')].map(slugify).filter(Boolean);
+    if (keys.includes(key)) return c.logo_url || null;
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Sessions — persisted in PostgreSQL so they survive serverless instances
 // ---------------------------------------------------------------------------
@@ -292,7 +314,7 @@ app.post('/api/medicines', requireAuth, requireOwner, async (req, res, next) => 
 
     const nm = String(name).trim();
     const co = String(company).trim();
-    const logo = String(logo_url || '').trim() || null;
+    const logo = String(logo_url || '').trim() || await resolveCompanyLogo(co);
 
     // A removed medicine keeps its row (sales history references it), so adding
     // the same name + company again revives that row instead of failing.
@@ -323,16 +345,79 @@ app.put('/api/medicines/:id', requireAuth, requireOwner, async (req, res, next) 
     const m = (await pool.query('SELECT * FROM medicines WHERE id = $1', [asId(req.params.id)])).rows[0];
     if (!m) return bad(res, 404, 'Medicine not found');
     const b = req.body || {};
-    const logo = 'logo_url' in b ? (String(b.logo_url || '').trim() || null) : m.logo_url;
+    const newCompany = String(b.company ?? m.company).trim();
+    const companyChanged = newCompany.toLowerCase() !== String(m.company || '').toLowerCase();
+    let logo;
+    if (b.logo_url != null && String(b.logo_url).trim()) {
+      logo = String(b.logo_url).trim();
+    } else if ('logo_url' in b) {
+      logo = null;
+    } else if (companyChanged || !m.logo_url) {
+      logo = await resolveCompanyLogo(newCompany);
+    } else {
+      logo = m.logo_url;
+    }
     await pool.query(
       'UPDATE medicines SET name=$1, company=$2, type=$3, shelf=$4, buy_price=$5, sell_price=$6, gst_rate=$7, low_stock_threshold=$8, logo_url=$9 WHERE id=$10',
       [
-        String(b.name ?? m.name).trim(), String(b.company ?? m.company).trim(), String(b.type ?? m.type),
+        String(b.name ?? m.name).trim(), newCompany, String(b.type ?? m.type),
         String(b.shelf ?? m.shelf).trim(), Number(b.buy_price ?? m.buy_price) || 0,
         Number(b.sell_price ?? m.sell_price) || 0, Number(b.gst_rate ?? m.gst_rate) || 0,
         Number(b.low_stock_threshold ?? m.low_stock_threshold) || 0, logo, m.id
       ]
     );
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ---------------------------------------------------------------------------
+// Companies (brand-logo directory)
+// ---------------------------------------------------------------------------
+app.get('/api/companies', requireAuth, async (req, res, next) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT id, name, slug, aliases, logo_url FROM companies ORDER BY name'
+    );
+    res.json(rows);
+  } catch (e) { next(e); }
+});
+
+app.post('/api/companies', requireAuth, requireOwner, async (req, res, next) => {
+  try {
+    const { name, aliases, logo_url } = req.body || {};
+    const nm = String(name || '').trim();
+    if (!nm) return bad(res, 400, 'Company name is required');
+    const slug = slugify(nm);
+    if (!slug) return bad(res, 400, 'Company name must contain letters or numbers');
+    const r = await pool.query(
+      'INSERT INTO companies (name, slug, aliases, logo_url) VALUES ($1, $2, $3, $4) ON CONFLICT (slug) DO NOTHING RETURNING id',
+      [nm, slug, String(aliases || '').trim(), String(logo_url || '').trim() || null]
+    );
+    if (!r.rows[0]) return bad(res, 409, 'A company with this name already exists');
+    res.json({ id: r.rows[0].id, slug });
+  } catch (e) { next(e); }
+});
+
+app.put('/api/companies/:id', requireAuth, requireOwner, async (req, res, next) => {
+  try {
+    const c = (await pool.query('SELECT * FROM companies WHERE id = $1', [asId(req.params.id)])).rows[0];
+    if (!c) return bad(res, 404, 'Company not found');
+    const { name, aliases, logo_url } = req.body || {};
+    const nm = String(name ?? c.name).trim();
+    const slug = slugify(nm);
+    if (!slug) return bad(res, 400, 'Company name must contain letters or numbers');
+    await pool.query(
+      'UPDATE companies SET name = $1, slug = $2, aliases = $3, logo_url = $4 WHERE id = $5',
+      [nm, slug, 'aliases' in req.body ? String(aliases || '').trim() : c.aliases,
+       'logo_url' in req.body ? (String(logo_url || '').trim() || null) : c.logo_url, c.id]
+    );
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+app.delete('/api/companies/:id', requireAuth, requireOwner, async (req, res, next) => {
+  try {
+    await pool.query('DELETE FROM companies WHERE id = $1', [asId(req.params.id)]);
     res.json({ ok: true });
   } catch (e) { next(e); }
 });

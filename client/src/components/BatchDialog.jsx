@@ -9,31 +9,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import DeleteSweepIcon from '@mui/icons-material/DeleteSweep';
 import { api } from '../api';
 import { fmt, fmtDate, fmtDateTime } from '../utils';
-
-const LOGO_PALETTE = ['#1a73e8', '#e8710a', '#188038', '#c5221f', '#7b1fa2', '#00796b', '#5d4037', '#455a64'];
-function MedicineLogo({ src, text }) {
-  const initial = (text || '?').trim().charAt(0).toUpperCase() || '?';
-  const colorIdx = (initial.charCodeAt(0) || 0) % LOGO_PALETTE.length;
-  const bg = LOGO_PALETTE[colorIdx];
-  if (src) {
-    return (
-      <Box
-        component="img" src={src} alt=""
-        sx={{ width: 36, height: 36, borderRadius: '8px', objectFit: 'contain', flexShrink: 0, bgcolor: '#fff', border: '1px solid #e0e6e4' }}
-        onError={(e) => { e.currentTarget.style.display = 'none'; }}
-      />
-    );
-  }
-  return (
-    <Box sx={{
-      width: 36, height: 36, borderRadius: '8px', flexShrink: 0, bgcolor: bg,
-      color: '#fff', fontWeight: 700, fontSize: 16,
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-    }}>
-      {initial}
-    </Box>
-  );
-}
+import MedicineLogo from './MedicineLogo';
 
 const REASONS = [
   { value: 'expired', label: 'Expired' },

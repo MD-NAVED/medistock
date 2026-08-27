@@ -5,6 +5,7 @@ import theme from './theme';
 import { AuthProvider, RequireAuth } from './auth';
 import AppLayout from './layout/AppLayout';
 import Login from './pages/Login';
+import SignUp from './pages/SignUp';
 import Dashboard from './pages/Dashboard';
 import Medicines from './pages/Medicines';
 import Billing from './pages/Billing';
@@ -13,6 +14,7 @@ import Purchases from './pages/Purchases';
 import Alerts from './pages/Alerts';
 import Reports from './pages/Reports';
 import Settings from './pages/Settings';
+import Companies from './pages/Companies';
 
 export default function App() {
   return (
@@ -22,12 +24,14 @@ export default function App() {
         <AuthProvider>
           <Routes>
             <Route path="/login" element={<Login />} />
+            <Route path="/signup" element={<SignUp />} />
             <Route element={<RequireAuth />}>
               <Route path="/" element={<AppLayout />}>
                 <Route index element={<Dashboard />} />
                     <Route path="billing" element={<Billing />} />
                     <Route path="khata" element={<Khata />} />
                 <Route path="medicines" element={<Medicines />} />
+                <Route path="companies" element={<Companies />} />
                 <Route path="purchases" element={<Purchases />} />
                 <Route path="alerts" element={<Alerts />} />
                 <Route path="reports" element={<Reports />} />

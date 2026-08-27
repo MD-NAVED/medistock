@@ -11,6 +11,7 @@ import LogoutIcon from '@mui/icons-material/Logout';
 import SpaceDashboardIcon from '@mui/icons-material/SpaceDashboard';
 import PointOfSaleIcon from '@mui/icons-material/PointOfSale';
 import MedicationIcon from '@mui/icons-material/Medication';
+import FactoryIcon from '@mui/icons-material/Factory';
 import ShoppingCartIcon from '@mui/icons-material/ShoppingCart';
 import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive';
 import BarChartIcon from '@mui/icons-material/BarChart';
@@ -73,6 +74,7 @@ export default function AppLayout() {
     { label: 'Billing (New Sale)', icon: <PointOfSaleIcon />, to: '/billing' },
     { label: 'Credit Book (Khata)', icon: <MenuBookIcon />, to: '/khata' },
     { label: 'Medicines', icon: <MedicationIcon />, to: '/medicines' },
+    ...(user.role === 'owner' ? [{ label: 'Companies', icon: <FactoryIcon />, to: '/companies' }] : []),
     { label: 'Purchases (Stock In)', icon: <ShoppingCartIcon />, to: '/purchases' },
     { label: 'Alerts', icon: <NotificationsActiveIcon />, to: '/alerts', badge: alertCount },
     { label: 'Reports', icon: <BarChartIcon />, to: '/reports' },
@@ -205,17 +207,26 @@ export default function AppLayout() {
             <Typography variant="subtitle2" sx={{ fontWeight: 800, color: 'success.dark', mb: 1 }}>
               📦 Direct Android APK File Download
             </Typography>
-            <Button
-              variant="contained"
-              color="success"
-              startIcon={<InstallMobileIcon />}
+            <a
               href="/MediStock.apk"
               download="MediStock.apk"
-              fullWidth
-              sx={{ fontWeight: 700, py: 1 }}
+              style={{
+                display: 'block',
+                width: '100%',
+                textDecoration: 'none',
+              }}
             >
-              Download MediStock.apk (4.4 MB)
-            </Button>
+              <Button
+                variant="contained"
+                color="success"
+                startIcon={<InstallMobileIcon />}
+                fullWidth
+                sx={{ fontWeight: 700, py: 1 }}
+                component="span"
+              >
+                Download MediStock.apk (4.4 MB)
+              </Button>
+            </a>
           </Box>
 
           <Divider sx={{ my: 1.5 }} />

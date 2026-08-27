@@ -327,3 +327,73 @@ ON CONFLICT (medicine_id, batch_number) DO NOTHING;
 -- INSERT from the app does not collide with the seed ids.
 SELECT setval('medicines_id_seq', COALESCE((SELECT MAX(id) FROM medicines), 1));
 SELECT setval('purchases_id_seq', COALESCE((SELECT MAX(id) FROM purchases), 1));
+
+-- ----------------------------------------------------------------------------
+-- 15. Medicine Companies (brand logo directory)
+-- Medicines auto-match their `company` name against this directory to pick up
+-- the real brand logo. `slug` is the normalized name used for matching, and
+-- `aliases` is a comma-separated list of extra spellings (e.g. "J&J" for
+-- "Johnson & Johnson") so real-world name variants still resolve.
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS companies (
+  id         SERIAL PRIMARY KEY,
+  name       TEXT NOT NULL UNIQUE,
+  slug       TEXT NOT NULL UNIQUE,
+  aliases    TEXT NOT NULL DEFAULT '',
+  logo_url   TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT INTO companies (name, slug, aliases, logo_url) VALUES
+  -- Demo-catalog companies first, so existing medicines pick up logos immediately
+  ('Micro Labs',            'micro-labs',            'microlab',                              'https://www.google.com/s2/favicons?domain_url=https://www.microlabsltd.com&sz=128'),
+  ('GSK',                   'gsk',                   'glaxosmithkline,glaxo smithkline',     'https://www.google.com/s2/favicons?domain_url=https://www.gsk.com&sz=128'),
+  ('Cipla',                 'cipla',                 '',                                      'https://www.google.com/s2/favicons?domain_url=https://www.cipla.com&sz=128'),
+  ('Alembic',               'alembic',               'alembic pharmaceuticals',              'https://www.google.com/s2/favicons?domain_url=https://www.alembicpharmaceuticals.com&sz=128'),
+  ('Aristo',                'aristo',                'aristo pharmaceuticals',               'https://www.google.com/s2/favicons?domain_url=https://www.aristopharma.com&sz=128'),
+  ('Torrent',               'torrent',               'torrent pharmaceuticals',              'https://www.google.com/s2/favicons?domain_url=https://www.torrentpharma.com&sz=128'),
+  ('Glenmark',              'glenmark',              'glenmark pharmaceuticals',             'https://www.google.com/s2/favicons?domain_url=https://www.glenmarkpharma.com&sz=128'),
+  ('USV',                   'usv',                   'usv pvt,usv private',                  'https://www.google.com/s2/favicons?domain_url=https://www.usvindia.com&sz=128'),
+  ('Abbott',                'abbott',                '',                                      'https://www.google.com/s2/favicons?domain_url=https://www.abbott.com&sz=128'),
+  ('FDC',                   'fdc',                   'fdc limited',                           'https://www.google.com/s2/favicons?domain_url=https://www.fdcindia.com&sz=128'),
+  ('Reckitt',               'reckitt',               'reckitt benckiser',                    'https://www.google.com/s2/favicons?domain_url=https://www.reckitt.com&sz=128'),
+  ('Sun Pharma',            'sun-pharma',            'sun pharmaceutical,sun',                'https://www.google.com/s2/favicons?domain_url=https://www.sunpharma.com&sz=128'),
+  ('Biocon',                'biocon',                '',                                      'https://www.google.com/s2/favicons?domain_url=https://www.biocon.com&sz=128'),
+  ('Baxter',                'baxter',                'baxalta',                               'https://www.google.com/s2/favicons?domain_url=https://www.baxter.com&sz=128'),
+  -- Major Indian & multinational pharma companies
+  ('Dr. Reddy''s Laboratories','dr-reddy-s-laboratories','dr reddy,dr reddys',                'https://www.google.com/s2/favicons?domain_url=https://www.drreddys.com&sz=128'),
+  ('Lupin',                 'lupin',                 'lupin limited',                         'https://www.google.com/s2/favicons?domain_url=https://www.lupin.com&sz=128'),
+  ('Aurobindo Pharma',      'aurobindo-pharma',      '',                                      'https://www.google.com/s2/favicons?domain_url=https://www.aurobindo.com&sz=128'),
+  ('Zydus Lifesciences',    'zydus-lifesciences',    'zydus,cadila healthcare',               'https://www.google.com/s2/favicons?domain_url=https://www.zyduslife.com&sz=128'),
+  ('Alkem Laboratories',    'alkem-laboratories',    'alkem',                                 'https://www.google.com/s2/favicons?domain_url=https://www.alkemlabs.com&sz=128'),
+  ('Mankind Pharma',        'mankind-pharma',        'mankind',                               'https://www.google.com/s2/favicons?domain_url=https://www.mankindpharma.com&sz=128'),
+  ('Intas Pharmaceuticals', 'intas-pharmaceuticals', 'intas',                                 'https://www.google.com/s2/favicons?domain_url=https://www.intaspharma.com&sz=128'),
+  ('Cadila Pharmaceuticals','cadila-pharmaceuticals','cadila',                                'https://www.google.com/s2/favicons?domain_url=https://www.cadilapharma.com&sz=128'),
+  ('Wockhardt',             'wockhardt',             '',                                      'https://www.google.com/s2/favicons?domain_url=https://www.wockhardt.com&sz=128'),
+  ('Emcure Pharmaceuticals','emcure-pharmaceuticals','emcure',                                'https://www.google.com/s2/favicons?domain_url=https://www.emcure.com&sz=128'),
+  ('Ipca Laboratories',     'ipca-laboratories',     'ipca',                                  'https://www.google.com/s2/favicons?domain_url=https://www.ipca.com&sz=128'),
+  ('Ajanta Pharma',         'ajanta-pharma',         'ajanta',                                'https://www.google.com/s2/favicons?domain_url=https://www.ajantapharma.com&sz=128'),
+  ('Eris Lifesciences',     'eris-lifesciences',     'eris',                                  'https://www.google.com/s2/favicons?domain_url=https://www.eris.co.in&sz=128'),
+  ('Macleods Pharmaceuticals','macleods-pharmaceuticals','macleods',                          'https://www.google.com/s2/favicons?domain_url=https://www.macleodspharma.com&sz=128'),
+  ('Indoco Remedies',       'indoco-remedies',       'indoco',                                'https://www.google.com/s2/favicons?domain_url=https://www.indoco.com&sz=128'),
+  ('Unichem Laboratories',  'unichem-laboratories',  'unichem',                               'https://www.google.com/s2/favicons?domain_url=https://www.unichemlabs.com&sz=128'),
+  ('Natco Pharma',          'natco-pharma',          'natco',                                 'https://www.google.com/s2/favicons?domain_url=https://www.natcopharma.co.in&sz=128'),
+  ('Laurus Labs',           'laurus-labs',           'laurus',                                'https://www.google.com/s2/favicons?domain_url=https://www.lauruslabs.com&sz=128'),
+  ('Divis Laboratories',    'divis-laboratories',    'divis',                                 'https://www.google.com/s2/favicons?domain_url=https://www.divislabs.com&sz=128'),
+  ('Granules India',        'granules-india',        'granules',                              'https://www.google.com/s2/favicons?domain_url=https://www.granulesindia.com&sz=128'),
+  ('Morepen Laboratories',  'morepen-laboratories',  'morepen',                               'https://www.google.com/s2/favicons?domain_url=https://www.morepen.com&sz=128'),
+  ('Himalaya Wellness',     'himalaya-wellness',     'himalaya,himalaya herbal',              'https://www.google.com/s2/favicons?domain_url=https://www.himalayawellness.in&sz=128'),
+  ('Dabur',                 'dabur',                 '',                                      'https://www.google.com/s2/favicons?domain_url=https://www.dabur.com&sz=128'),
+  ('Serum Institute of India','serum-institute-of-india','serum',                             'https://www.google.com/s2/favicons?domain_url=https://www.seruminstitute.com&sz=128'),
+  ('Panacea Biotec',        'panacea-biotec',        'panacea',                               'https://www.google.com/s2/favicons?domain_url=https://www.panaceabiotec.com&sz=128'),
+  -- Multinationals commonly stocked by Indian pharmacies
+  ('Johnson & Johnson',     'johnson-johnson',       'j&j,jnj',                               'https://www.google.com/s2/favicons?domain_url=https://www.jnj.com&sz=128'),
+  ('Pfizer',                'pfizer',                '',                                      'https://www.google.com/s2/favicons?domain_url=https://www.pfizer.com&sz=128'),
+  ('Novartis',              'novartis',              '',                                      'https://www.google.com/s2/favicons?domain_url=https://www.novartis.com&sz=128'),
+  ('Sanofi',                'sanofi',                '',                                      'https://www.google.com/s2/favicons?domain_url=https://www.sanofi.com&sz=128'),
+  ('Merck',                 'merck',                 '',                                      'https://www.google.com/s2/favicons?domain_url=https://www.merckgroup.com&sz=128'),
+  ('AstraZeneca',           'astrazeneca',           '',                                      'https://www.google.com/s2/favicons?domain_url=https://www.astrazeneca.com&sz=128'),
+  ('Eli Lilly',             'eli-lilly',             'lilly',                                 'https://www.google.com/s2/favicons?domain_url=https://www.lilly.com&sz=128'),
+  ('Boehringer Ingelheim',  'boehringer-ingelheim',  '',                                      'https://www.google.com/s2/favicons?domain_url=https://www.boehringer-ingelheim.com&sz=128'),
+  ('Bayer',                 'bayer',                 '',                                      'https://www.google.com/s2/favicons?domain_url=https://www.bayer.com&sz=128')
+ON CONFLICT (slug) DO NOTHING;
