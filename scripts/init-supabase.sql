@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS medicines (
   sell_price          NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
   gst_rate            NUMERIC(5, 2) NOT NULL DEFAULT 12.00,
   low_stock_threshold INTEGER NOT NULL DEFAULT 10,
+  logo_url            TEXT,
   active              INTEGER NOT NULL DEFAULT 1,
   created_at          TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT unique_medicine_company UNIQUE(name, company)

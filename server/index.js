@@ -97,6 +97,38 @@ function recentFailures(username) {
 // ---------------------------------------------------------------------------
 // Auth
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// First-time Admin Signup (only allowed when NO owner exists)
+// ---------------------------------------------------------------------------
+app.post('/api/auth/signup', async (req, res, next) => {
+  try {
+    // Check if any owner already exists
+    const owner = (await pool.query("SELECT id FROM users WHERE role = 'owner' AND active = 1 LIMIT 1")).rows[0];
+    if (owner) {
+      return bad(res, 403, 'Admin already exists. Please sign in or contact the admin.');
+    }
+
+    const { username, password, name } = req.body || {};
+    if (!username?.trim() || !password || !name?.trim()) {
+      return bad(res, 400, 'Name, username and password are required');
+    }
+    if (String(password).length < 6) {
+      return bad(res, 400, 'Password must be at least 6 characters');
+    }
+
+    const uname = String(username).trim();
+    const { rows } = await pool.query('SELECT id FROM users WHERE username = $1', [uname]);
+    if (rows[0]) {
+      return bad(res, 409, 'That username is already taken');
+    }
+
+    // Create the first owner
+    const userId = await addUser(uname, String(password), String(name).trim(), 'owner');
+    const token = await createSession(userId);
+    res.json({ token, user: { id: userId, username: uname, name: String(name).trim(), role: 'owner' } });
+  } catch (e) { next(e); }
+});
+
 app.post('/api/auth/login', async (req, res, next) => {
   try {
     const { username, password } = req.body || {};
@@ -163,7 +195,7 @@ app.get('/api/medicines', requireAuth, async (req, res, next) => {
     const q = String(req.query.q || '').trim();
     const like = '%' + q + '%';
     const { rows } = await pool.query(
-      'SELECT m.id, m.name, m.company, m.type, m.shelf, m.buy_price::float8 AS buy_price, m.sell_price::float8 AS sell_price, m.gst_rate::float8 AS gst_rate, m.low_stock_threshold, COALESCE(SUM(b.quantity), 0)::int AS stock, MIN(CASE WHEN b.quantity > 0 THEN b.expiry_date END) AS nearest_expiry FROM medicines m LEFT JOIN batches b ON b.medicine_id = m.id WHERE m.active = 1 AND (m.name ILIKE $1 OR m.company ILIKE $1) GROUP BY m.id ORDER BY m.name LIMIT 500',
+      'SELECT m.id, m.name, m.company, m.type, m.shelf, m.buy_price::float8 AS buy_price, m.sell_price::float8 AS sell_price, m.gst_rate::float8 AS gst_rate, m.low_stock_threshold, m.logo_url, COALESCE(SUM(b.quantity), 0)::int AS stock, MIN(CASE WHEN b.quantity > 0 THEN b.expiry_date END) AS nearest_expiry FROM medicines m LEFT JOIN batches b ON b.medicine_id = m.id WHERE m.active = 1 AND (m.name ILIKE $1 OR m.company ILIKE $1) GROUP BY m.id ORDER BY m.name LIMIT 500',
       [like]
     );
     res.json(rows);
@@ -254,12 +286,13 @@ app.delete('/api/medicines/:id', requireAuth, requireOwner, async (req, res, nex
 
 app.post('/api/medicines', requireAuth, requireOwner, async (req, res, next) => {
   try {
-    const { name, company, type, shelf, buy_price, sell_price, gst_rate, low_stock_threshold } = req.body || {};
+    const { name, company, type, shelf, buy_price, sell_price, gst_rate, low_stock_threshold, logo_url } = req.body || {};
     if (!name?.trim() || !company?.trim()) return bad(res, 400, 'Medicine name and company are required');
     if (Number(sell_price) <= 0) return bad(res, 400, 'Sell price must be greater than 0');
 
     const nm = String(name).trim();
     const co = String(company).trim();
+    const logo = String(logo_url || '').trim() || null;
 
     // A removed medicine keeps its row (sales history references it), so adding
     // the same name + company again revives that row instead of failing.
@@ -269,17 +302,17 @@ app.post('/api/medicines', requireAuth, requireOwner, async (req, res, next) => 
     }
     if (existing) {
       await pool.query(
-        'UPDATE medicines SET active = 1, type = $1, shelf = $2, buy_price = $3, sell_price = $4, gst_rate = $5, low_stock_threshold = $6 WHERE id = $7',
+        'UPDATE medicines SET active = 1, type = $1, shelf = $2, buy_price = $3, sell_price = $4, gst_rate = $5, low_stock_threshold = $6, logo_url = $7 WHERE id = $8',
         [String(type || 'Tablet'), String(shelf || '').trim(), Number(buy_price) || 0, Number(sell_price) || 0,
-         Number(gst_rate) || 0, Number(low_stock_threshold) || 10, existing.id]
+         Number(gst_rate) || 0, Number(low_stock_threshold) || 10, logo, existing.id]
       );
       return res.json({ id: existing.id, restored: true });
     }
 
     const r = await pool.query(
-      'INSERT INTO medicines (name, company, type, shelf, buy_price, sell_price, gst_rate, low_stock_threshold) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id',
+      'INSERT INTO medicines (name, company, type, shelf, buy_price, sell_price, gst_rate, low_stock_threshold, logo_url) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id',
       [nm, co, String(type || 'Tablet'), String(shelf || '').trim(),
-       Number(buy_price) || 0, Number(sell_price) || 0, Number(gst_rate) || 0, Number(low_stock_threshold) || 10]
+       Number(buy_price) || 0, Number(sell_price) || 0, Number(gst_rate) || 0, Number(low_stock_threshold) || 10, logo]
     );
     res.json({ id: r.rows[0].id });
   } catch (e) { next(e); }
@@ -290,13 +323,14 @@ app.put('/api/medicines/:id', requireAuth, requireOwner, async (req, res, next) 
     const m = (await pool.query('SELECT * FROM medicines WHERE id = $1', [asId(req.params.id)])).rows[0];
     if (!m) return bad(res, 404, 'Medicine not found');
     const b = req.body || {};
+    const logo = 'logo_url' in b ? (String(b.logo_url || '').trim() || null) : m.logo_url;
     await pool.query(
-      'UPDATE medicines SET name=$1, company=$2, type=$3, shelf=$4, buy_price=$5, sell_price=$6, gst_rate=$7, low_stock_threshold=$8 WHERE id=$9',
+      'UPDATE medicines SET name=$1, company=$2, type=$3, shelf=$4, buy_price=$5, sell_price=$6, gst_rate=$7, low_stock_threshold=$8, logo_url=$9 WHERE id=$10',
       [
         String(b.name ?? m.name).trim(), String(b.company ?? m.company).trim(), String(b.type ?? m.type),
         String(b.shelf ?? m.shelf).trim(), Number(b.buy_price ?? m.buy_price) || 0,
         Number(b.sell_price ?? m.sell_price) || 0, Number(b.gst_rate ?? m.gst_rate) || 0,
-        Number(b.low_stock_threshold ?? m.low_stock_threshold) || 0, m.id
+        Number(b.low_stock_threshold ?? m.low_stock_threshold) || 0, logo, m.id
       ]
     );
     res.json({ ok: true });

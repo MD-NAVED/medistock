@@ -14,6 +14,31 @@ import { api } from '../api';
 import { printInvoice } from '../printInvoice';
 import { fmt, fmtDate } from '../utils';
 
+const LOGO_PALETTE = ['#1a73e8', '#e8710a', '#188038', '#c5221f', '#7b1fa2', '#00796b', '#5d4037', '#455a64'];
+function MedicineLogo({ src, text }) {
+  const initial = (text || '?').trim().charAt(0).toUpperCase() || '?';
+  const colorIdx = (initial.charCodeAt(0) || 0) % LOGO_PALETTE.length;
+  const bg = LOGO_PALETTE[colorIdx];
+  if (src) {
+    return (
+      <Box
+        component="img" src={src} alt=""
+        sx={{ width: 28, height: 28, borderRadius: '6px', objectFit: 'contain', flexShrink: 0, bgcolor: '#fff', border: '1px solid #e0e6e4' }}
+        onError={(e) => { e.currentTarget.style.display = 'none'; }}
+      />
+    );
+  }
+  return (
+    <Box sx={{
+      width: 28, height: 28, borderRadius: '6px', flexShrink: 0, bgcolor: bg,
+      color: '#fff', fontWeight: 700, fontSize: 13,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+    }}>
+      {initial}
+    </Box>
+  );
+}
+
 export default function Billing() {
   const isMobile = useMediaQuery('(max-width:900px)');
   const [medicines, setMedicines] = useState([]);
@@ -59,7 +84,7 @@ export default function Billing() {
     if (existing) {
       setCart(cart.map((c) => (c.id === selected.id ? { ...c, qty: c.qty + Number(qty) } : c)));
     } else {
-      setCart([...cart, { id: selected.id, name: selected.name, company: selected.company, price: selected.sell_price, gst_rate: selected.gst_rate, stock: selected.stock, qty: Number(qty) }]);
+      setCart([...cart, { id: selected.id, name: selected.name, company: selected.company, price: selected.sell_price, gst_rate: selected.gst_rate, stock: selected.stock, qty: Number(qty), logo_url: selected.logo_url }]);
     }
     setSelected(null);
     setQty(1);
@@ -132,11 +157,14 @@ export default function Billing() {
                 const { key, ...rest } = props;
                 return (
                   <li key={key} {...rest}>
-                    <Box sx={{ flexGrow: 1 }}>
-                      <Typography sx={{ fontSize: 14 }}>{o.name} <Typography component="span" variant="caption" color="text.secondary">— {o.company}</Typography></Typography>
-                      <Typography variant="caption" color={o.stock <= 0 ? 'error.main' : 'text.secondary'}>
-                        {fmt(o.sell_price)} · Stock: {o.stock} {o.stock <= 0 ? '(OUT OF STOCK)' : ''}
-                      </Typography>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexGrow: 1 }}>
+                      <MedicineLogo src={o.logo_url} text={o.company || o.name} />
+                      <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                        <Typography sx={{ fontSize: 14 }}>{o.name} <Typography component="span" variant="caption" color="text.secondary">— {o.company}</Typography></Typography>
+                        <Typography variant="caption" color={o.stock <= 0 ? 'error.main' : 'text.secondary'}>
+                          {fmt(o.sell_price)} · Stock: {o.stock} {o.stock <= 0 ? '(OUT OF STOCK)' : ''}
+                        </Typography>
+                      </Box>
                     </Box>
                   </li>
                 );
@@ -169,6 +197,7 @@ export default function Billing() {
               {cart.map((c) => (
                 <Paper key={c.id} variant="outlined" sx={{ p: 1.8, mb: 1.5, bgcolor: '#fafbfb' }}>
                   <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
+                    <MedicineLogo src={c.logo_url} text={c.company || c.name} />
                     <Box sx={{ flexGrow: 1, minWidth: 0 }}>
                       <Typography sx={{ fontSize: 14, fontWeight: 700, lineHeight: 1.3 }}>{c.name}</Typography>
                       <Typography variant="caption" color="text.secondary">
@@ -220,8 +249,13 @@ export default function Billing() {
                   {cart.map((c) => (
                     <TableRow key={c.id}>
                       <TableCell>
-                        <Typography sx={{ fontSize: 14, fontWeight: 600 }}>{c.name}</Typography>
-                        <Typography variant="caption" color="text.secondary">{c.company} · stock {c.stock}</Typography>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          <MedicineLogo src={c.logo_url} text={c.company || c.name} />
+                          <Box>
+                            <Typography sx={{ fontSize: 14, fontWeight: 600 }}>{c.name}</Typography>
+                            <Typography variant="caption" color="text.secondary">{c.company} · stock {c.stock}</Typography>
+                          </Box>
+                        </Box>
                       </TableCell>
                       <TableCell align="center">
                         <TextField size="small" type="number" value={c.qty} inputProps={{ min: 1, max: c.stock }}
