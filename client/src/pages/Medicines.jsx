@@ -168,11 +168,11 @@ export default function Medicines() {
     {
       field: 'name', headerName: 'Medicine', flex: 1.4, minWidth: 240,
       renderCell: (p) => (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, height: '100%', width: '100%' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, height: '100%', width: '100%', minWidth: 0 }}>
           <MedicineLogo src={p.row.logo_url} text={p.row.company || p.row.name} />
           <Box sx={{ minWidth: 0 }}>
-            <Typography sx={{ fontSize: 14, fontWeight: 600, lineHeight: 1.3 }}>{p.value}</Typography>
-            <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.3 }}>{p.row.company}</Typography>
+            <Typography sx={{ fontSize: 14, fontWeight: 600, lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.value}</Typography>
+            <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.row.company}</Typography>
           </Box>
         </Box>
       ),

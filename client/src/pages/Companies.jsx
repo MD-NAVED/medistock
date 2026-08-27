@@ -89,13 +89,13 @@ export default function Companies() {
     {
       field: 'name', headerName: 'Company', flex: 1.5, minWidth: 240,
       renderCell: (p) => (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, height: '100%', width: '100%' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, height: '100%', width: '100%', minWidth: 0 }}>
           <MedicineLogo src={p.row.logo_url} text={p.row.name} />
-          <Typography sx={{ fontSize: 14, fontWeight: 600 }}>{p.value}</Typography>
+          <Typography sx={{ fontSize: 14, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.value}</Typography>
         </Box>
       ),
     },
-    { field: 'aliases', headerName: 'Also matches', flex: 1, minWidth: 200, renderCell: (p) => <Typography variant="caption" color="text.secondary">{p.value || '—'}</Typography> },
+    { field: 'aliases', headerName: 'Also matches', flex: 1, minWidth: 200, renderCell: (p) => <Typography variant="caption" color="text.secondary" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.value || '—'}</Typography> },
     ...(isOwner ? [{
       field: 'actions', headerName: '', width: 100, sortable: false, filterable: false,
       renderCell: (p) => (

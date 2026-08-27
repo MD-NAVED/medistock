@@ -144,7 +144,7 @@ export default function AppLayout() {
             <MenuIcon />
           </IconButton>
           <LocalPharmacyIcon sx={{ display: { xs: 'none', sm: 'block' }, color: 'primary.main', mr: 1 }} />
-          <Typography variant="h6" sx={{ flexGrow: 1, fontSize: { xs: 16, sm: 20 } }}>
+          <Typography variant="h6" sx={{ flexGrow: 1, fontSize: { xs: 16, sm: 20 }, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {storeName || 'MediStock'}
           </Typography>
           {!isStandalone && (

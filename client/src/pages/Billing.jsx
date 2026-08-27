@@ -175,8 +175,8 @@ export default function Billing() {
                   <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
                     <MedicineLogo src={c.logo_url} text={c.company || c.name} />
                     <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-                      <Typography sx={{ fontSize: 14, fontWeight: 700, lineHeight: 1.3 }}>{c.name}</Typography>
-                      <Typography variant="caption" color="text.secondary">
+                      <Typography sx={{ fontSize: 14, fontWeight: 700, lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</Typography>
+                      <Typography variant="caption" color="text.secondary" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {c.company} · {fmt(c.price)} each{gstOn ? ` · GST ${c.gst_rate}%` : ''}
                       </Typography>
                     </Box>
@@ -225,11 +225,11 @@ export default function Billing() {
                   {cart.map((c) => (
                     <TableRow key={c.id}>
                       <TableCell>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
                           <MedicineLogo src={c.logo_url} text={c.company || c.name} />
-                          <Box>
-                            <Typography sx={{ fontSize: 14, fontWeight: 600 }}>{c.name}</Typography>
-                            <Typography variant="caption" color="text.secondary">{c.company} · stock {c.stock}</Typography>
+                          <Box sx={{ minWidth: 0 }}>
+                            <Typography sx={{ fontSize: 14, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</Typography>
+                            <Typography variant="caption" color="text.secondary" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.company} · stock {c.stock}</Typography>
                           </Box>
                         </Box>
                       </TableCell>

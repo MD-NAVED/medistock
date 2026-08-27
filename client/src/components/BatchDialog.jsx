@@ -80,9 +80,9 @@ export default function BatchDialog({ medicineId, onClose, onChanged }) {
       <DialogTitle sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, pr: 1 }}>
         <MedicineLogo src={med?.logo_url} text={med?.company || med?.name || 'M'} />
         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-          <Typography sx={{ fontWeight: 700, fontSize: 18 }}>{med ? med.name : 'Loading…'}</Typography>
+          <Typography sx={{ fontWeight: 700, fontSize: 18, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{med ? med.name : 'Loading…'}</Typography>
           {med && (
-            <Typography variant="caption" color="text.secondary">
+            <Typography variant="caption" color="text.secondary" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {med.company} · {med.type}{med.shelf ? ` · Shelf ${med.shelf}` : ''} · total stock {data.totalStock}
             </Typography>
           )}
