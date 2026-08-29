@@ -3,7 +3,6 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   AppBar, Toolbar, Typography, IconButton, Box, Chip, Badge, Drawer, Divider,
   List, ListItemButton, ListItemIcon, ListItemText, Tooltip, Avatar,
-  Dialog, DialogTitle, DialogContent, DialogActions, Button,
 } from '@mui/material';
 import MenuIcon from '@mui/icons-material/Menu';
 import LocalPharmacyIcon from '@mui/icons-material/LocalPharmacy';
@@ -16,7 +15,6 @@ import ShoppingCartIcon from '@mui/icons-material/ShoppingCart';
 import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive';
 import BarChartIcon from '@mui/icons-material/BarChart';
 import SettingsIcon from '@mui/icons-material/Settings';
-import InstallMobileIcon from '@mui/icons-material/InstallMobile';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
 import { api } from '../api';
 import { useAuth } from '../auth';
@@ -30,39 +28,6 @@ export default function AppLayout() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [storeName, setStoreName] = useState('');
   const [alertCount, setAlertCount] = useState(0);
-  const [installEvt, setInstallEvt] = useState(null);
-  const [isStandalone, setIsStandalone] = useState(false);
-  const [showInstallGuide, setShowInstallGuide] = useState(false);
-
-  // PWA install: detect standalone mode and capture install prompt event.
-  useEffect(() => {
-    const standalone = window.matchMedia('(display-mode: standalone)').matches
-      || window.navigator.standalone === true;
-    setIsStandalone(standalone);
-    if (standalone) return undefined;
-
-    const onPrompt = (e) => { e.preventDefault(); setInstallEvt(e); };
-    const onInstalled = () => { setInstallEvt(null); setIsStandalone(true); };
-    window.addEventListener('beforeinstallprompt', onPrompt);
-    window.addEventListener('appinstalled', onInstalled);
-    return () => {
-      window.removeEventListener('beforeinstallprompt', onPrompt);
-      window.removeEventListener('appinstalled', onInstalled);
-    };
-  }, []);
-
-  const handleInstallClick = async () => {
-    if (installEvt) {
-      installEvt.prompt();
-      const choice = await installEvt.userChoice;
-      if (choice?.outcome === 'accepted') {
-        setInstallEvt(null);
-        setIsStandalone(true);
-      }
-    } else {
-      setShowInstallGuide(true);
-    }
-  };
 
   useEffect(() => {
     api('/api/settings').then((s) => setStoreName(s.store_name)).catch(() => {});
@@ -117,21 +82,6 @@ export default function AppLayout() {
           );
           return button;
         })}
-
-        {!isStandalone && (
-          <>
-            <Divider sx={{ my: 1 }} />
-            <ListItemButton
-              onClick={() => { setMobileOpen(false); handleInstallClick(); }}
-              sx={{ borderRadius: 2, bgcolor: '#e0f2f1', color: '#004d40', '&:hover': { bgcolor: '#b2dfdb' } }}
-            >
-              <ListItemIcon sx={{ minWidth: 40, color: '#004d40' }}>
-                <InstallMobileIcon />
-              </ListItemIcon>
-              <ListItemText primary="Install App (Download)" primaryTypographyProps={{ fontSize: 14, fontWeight: 700 }} />
-            </ListItemButton>
-          </>
-        )}
       </List>
     </Box>
   );
@@ -147,17 +97,6 @@ export default function AppLayout() {
           <Typography variant="h6" sx={{ flexGrow: 1, fontSize: { xs: 16, sm: 20 }, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {storeName || 'MediStock'}
           </Typography>
-          {!isStandalone && (
-            <Tooltip title="Install MediStock as an App on this device">
-              <IconButton
-                color="primary"
-                onClick={handleInstallClick}
-                sx={{ mr: 1, bgcolor: '#e0f2f1', color: '#004d40', '&:hover': { bgcolor: '#b2dfdb' } }}
-              >
-                <InstallMobileIcon />
-              </IconButton>
-            </Tooltip>
-          )}
           <Chip
             size="small"
             color={user.role === 'owner' ? 'primary' : 'default'}
@@ -196,74 +135,6 @@ export default function AppLayout() {
         <Toolbar />
         <Outlet />
       </Box>
-
-      {/* PWA Install Instructions Modal */}
-      <Dialog open={showInstallGuide} onClose={() => setShowInstallGuide(false)} maxWidth="xs" fullWidth>
-        <DialogTitle sx={{ fontWeight: 800, display: 'flex', alignItems: 'center', gap: 1 }}>
-          <InstallMobileIcon color="primary" /> Install MediStock App
-        </DialogTitle>
-        <DialogContent dividers>
-          <Box sx={{ mb: 2, p: 2, bgcolor: '#e8f5e9', borderRadius: 2, border: '1px solid #c8e6c9', textAlign: 'center' }}>
-            <Typography variant="subtitle2" sx={{ fontWeight: 800, color: 'success.dark', mb: 1 }}>
-              📦 Direct Android APK File Download
-            </Typography>
-            <a
-              href="/MediStock.apk"
-              download="MediStock.apk"
-              style={{
-                display: 'block',
-                width: '100%',
-                textDecoration: 'none',
-              }}
-            >
-              <Button
-                variant="contained"
-                color="success"
-                startIcon={<InstallMobileIcon />}
-                fullWidth
-                sx={{ fontWeight: 700, py: 1 }}
-                component="span"
-              >
-                Download MediStock.apk (4.4 MB)
-              </Button>
-            </a>
-          </Box>
-
-          <Divider sx={{ my: 1.5 }} />
-
-          <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5, color: 'primary.main' }}>
-            🤖 Android Chrome PWA Install:
-          </Typography>
-          <Typography variant="body2" paragraph>
-            1. Tap browser menu (<b>3 dots ⋮</b> at top right).<br />
-            2. Tap <b>"Add to Home screen"</b> or <b>"Install App"</b>.<br />
-            3. Confirm <b>Add/Install</b> — MediStock will open as an app!
-          </Typography>
-
-          <Divider sx={{ my: 1.5 }} />
-
-          <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5, color: 'primary.main' }}>
-            🍎 iPhone / iPad (Safari):
-          </Typography>
-          <Typography variant="body2" paragraph>
-            1. Tap the <b>Share button ⎋</b> at the bottom of Safari.<br />
-            2. Scroll down and tap <b>"Add to Home Screen"</b>.<br />
-            3. Tap <b>Add</b> at top right.
-          </Typography>
-
-          <Divider sx={{ my: 1.5 }} />
-
-          <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5, color: 'primary.main' }}>
-            💻 Desktop (Chrome / Edge):
-          </Typography>
-          <Typography variant="body2">
-            Click the <b>Install icon</b> in the top right browser address bar.
-          </Typography>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setShowInstallGuide(false)} variant="contained">Got it!</Button>
-        </DialogActions>
-      </Dialog>
     </Box>
   );
 }

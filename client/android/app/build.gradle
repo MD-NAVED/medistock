@@ -20,6 +20,9 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            // Sign with the debug keystore so the sideload APK installs without a
+            // release signing setup; rebuilds on this machine update in place.
+            signingConfig signingConfigs.debug
         }
     }
 }
