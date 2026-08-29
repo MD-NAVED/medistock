@@ -11,21 +11,24 @@ import LoginIcon from '@mui/icons-material/Login';
 import { api } from '../api';
 import { useAuth } from '../auth';
 
-export default function Login() {
+export default function SignUp() {
   const { login } = useAuth();
   const navigate = useNavigate();
+  const [name, setName] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const expired = new URLSearchParams(window.location.search).get('expired') === '1';
 
   const submit = async (e) => {
     e.preventDefault();
     setError('');
     setBusy(true);
     try {
-      const data = await api('/api/auth/login', { method: 'POST', body: { username, password } });
+      const data = await api('/api/auth/signup', {
+        method: 'POST',
+        body: { name, username, password }
+      });
       login(data.token, data.user);
       navigate('/');
     } catch (err) {
@@ -53,17 +56,20 @@ export default function Login() {
               <LocalPharmacyIcon sx={{ fontSize: 34 }} />
             </Avatar>
             <Typography variant="h5">MediStock</Typography>
-            <Typography variant="body2" color="text.secondary">Pharmacy Billing & Inventory</Typography>
+            <Typography variant="body2" color="text.secondary">Create Admin Account</Typography>
           </Box>
 
-          {expired && !error && (
-            <Alert severity="info" sx={{ mb: 2 }}>Your session ended. Please sign in again.</Alert>
-          )}
           {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
 
           <form onSubmit={submit}>
             <TextField
-              label="Username" fullWidth required autoFocus
+              label="Store Owner Name" fullWidth required autoFocus
+              value={name} onChange={(e) => setName(e.target.value)}
+              InputProps={{ startAdornment: (<InputAdornment position="start"><PersonIcon /></InputAdornment>) }}
+              sx={{ mb: 2 }}
+            />
+            <TextField
+              label="Username" fullWidth required
               value={username} onChange={(e) => setUsername(e.target.value)}
               InputProps={{ startAdornment: (<InputAdornment position="start"><PersonIcon /></InputAdornment>) }}
               sx={{ mb: 2 }}
@@ -75,16 +81,16 @@ export default function Login() {
               sx={{ mb: 3 }}
             />
             <Button type="submit" variant="contained" size="large" fullWidth startIcon={<LoginIcon />} disabled={busy}>
-              {busy ? 'Signing in…' : 'Sign In'}
+              {busy ? 'Creating Account…' : 'Create Admin Account'}
             </Button>
           </form>
 
           <Box sx={{ mt: 3, textAlign: 'center' }}>
             <Typography variant="body2" color="text.secondary">
-              First time here?{' '}
+              Already have an account?{' '}
             </Typography>
-            <Button component="a" href="/signup" variant="text" size="small">
-              Create Admin Account
+            <Button component="a" href="/login" variant="text" size="small">
+              Sign In
             </Button>
           </Box>
         </CardContent>
