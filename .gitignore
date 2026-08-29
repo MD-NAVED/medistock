@@ -31,6 +31,9 @@ client/android/app/build/
 client/android/.gradle/
 client/android/app/src/main/assets/public/
 
+# Locally built sideload APK (rebuilt by gradlew; distributed manually)
+client/public/MediStock.apk
+
 # Local test harness throwaway Postgres cluster + staged migration
 .local-pg/
 .local-pg-migrations/
