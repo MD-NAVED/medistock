@@ -1043,6 +1043,99 @@ app.get('/api/public/invoice/:id', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// Same token-gated invoice, rendered as a real PDF (tap = download/view).
+// "Rs." instead of ₹ because the built-in PDF fonts have no rupee glyph.
+const PDFDocument = require('pdfkit');
+
+app.get('/api/public/invoice/:id/pdf', async (req, res, next) => {
+  try {
+    const id = asId(req.params.id);
+    const t = String(req.query.t || '');
+    if (!id || !t || t !== invoiceToken(id)) return bad(res, 404, 'Invoice not found');
+
+    const sale = (await pool.query(
+      'SELECT id, invoice_number, customer_name, subtotal::float8 AS subtotal, gst_amount::float8 AS gst_amount, total::float8 AS total, status, created_at FROM sales WHERE id = $1',
+      [id]
+    )).rows[0];
+    if (!sale || sale.status === 'cancelled') return bad(res, 404, 'Invoice not found');
+
+    const settings = (await pool.query('SELECT store_name, phone, store_address, gst_number FROM settings WHERE id = 1')).rows[0] || {};
+    const items = (await pool.query(
+      'SELECT medicine_name, company, batch_number, quantity, unit_price::float8 AS unit_price, gst_rate::float8 AS gst_rate, line_total::float8 AS line_total FROM sale_items WHERE sale_id = $1 ORDER BY id',
+      [id]
+    )).rows;
+
+    const inr = (n) => 'Rs. ' + Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const GREEN = '#0b695c';
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline; filename="' + sale.invoice_number + '.pdf"');
+    const doc = new PDFDocument({ size: 'A4', margin: 42 });
+    doc.pipe(res);
+
+    doc.font('Helvetica-Bold').fontSize(20).fillColor(GREEN)
+      .text(settings.store_name || 'MediStock Pharmacy', { align: 'center' });
+    doc.font('Helvetica').fontSize(9).fillColor('#555555');
+    if (settings.store_address) doc.text(settings.store_address, { align: 'center' });
+    const contact = [settings.phone, settings.gst_number ? 'GSTIN: ' + settings.gst_number : ''].filter(Boolean).join('   |   ');
+    if (contact) doc.text(contact, { align: 'center' });
+    doc.moveDown(0.4).font('Helvetica-Bold').fontSize(11).fillColor(GREEN).text('TAX INVOICE', { align: 'center' });
+
+    doc.moveDown(1.2).font('Helvetica').fontSize(10).fillColor('#000000');
+    doc.font('Helvetica-Bold').text('Invoice: ' + sale.invoice_number, { continued: true })
+      .font('Helvetica').text('        Date: ' + new Date(sale.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }));
+    if (sale.customer_name) doc.text('Customer: ' + sale.customer_name);
+    doc.moveDown(0.8);
+
+    // Items table (fixed columns within the 511pt printable width)
+    const colItem = 42, colQty = 330, colRate = 395, colAmt = 475;
+    doc.font('Helvetica-Bold').fontSize(9).fillColor('#000000');
+    doc.text('Item', colItem, doc.y);
+    doc.text('Qty', colQty, doc.y, { width: 55, align: 'center' });
+    doc.text('Rate', colRate, doc.y, { width: 70, align: 'right' });
+    doc.text('Amount', colAmt, doc.y, { width: 78, align: 'right' });
+    doc.moveTo(colItem, doc.y + 14).lineTo(553, doc.y + 14).strokeColor('#999999').stroke();
+    doc.moveDown(1);
+
+    for (const it of items) {
+      const yStart = doc.y;
+      doc.font('Helvetica').fontSize(10).fillColor('#000000');
+      doc.text(it.medicine_name, colItem, yStart, { width: 270 });
+      doc.font('Helvetica').fontSize(8).fillColor('#777777')
+        .text([it.company, it.batch_number].filter(Boolean).join(' | '), colItem, doc.y, { width: 270 });
+      const yEnd = doc.y;
+      doc.font('Helvetica').fontSize(10).fillColor('#000000');
+      doc.text(String(it.quantity), colQty, yStart, { width: 55, align: 'center' });
+      doc.text(inr(it.unit_price).replace('Rs. ', ''), colRate, yStart, { width: 70, align: 'right' });
+      doc.text(inr(it.line_total).replace('Rs. ', ''), colAmt, yStart, { width: 78, align: 'right' });
+      doc.y = yEnd + 6;
+      if (doc.y > 700) { doc.addPage(); doc.y = 42; }
+    }
+
+    doc.moveTo(colItem, doc.y + 4).lineTo(553, doc.y + 4).strokeColor('#bbbbbb').stroke();
+    doc.moveDown(1);
+
+    const totalX = 330;
+    const totalRow = (label, value, bold) => {
+      const y = doc.y;
+      doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(bold ? 13 : 10).fillColor(bold ? GREEN : '#000000');
+      doc.text(label, totalX, y, { width: 110, align: 'right' });
+      doc.text(value, totalX + 113, y, { width: 110, align: 'right' });
+      doc.y = y + (bold ? 20 : 16);
+    };
+    totalRow('Subtotal', inr(sale.subtotal), false);
+    if (sale.gst_amount > 0) totalRow('GST', inr(sale.gst_amount), false);
+    doc.moveTo(totalX, doc.y).lineTo(553, doc.y).lineWidth(1.5).strokeColor(GREEN).stroke();
+    doc.y += 6;
+    totalRow('TOTAL', inr(sale.total), true);
+
+    doc.moveDown(2).font('Helvetica').fontSize(9).fillColor('#777777')
+      .text('Thank you for your visit!  -  Generated via MediStock', { align: 'center' });
+
+    doc.end();
+  } catch (e) { next(e); }
+});
+
 app.get('/api/whatsapp/summary', requireAuth, async (req, res, next) => {
   try {
     const [today, purchases, month, low, expiring, khata, settings] = await Promise.all([

@@ -34,7 +34,7 @@ function buildWhatsAppLink(invoice, storeName) {
   if (Number(sale.gst_amount) > 0) lines.push(`GST: ₹${Number(sale.gst_amount).toFixed(2)}`);
   lines.push(`*TOTAL: ₹${Number(sale.total).toFixed(2)}*`);
   lines.push('');
-  lines.push(`🔗 Full invoice (PDF): ${window.location.origin}/invoice/${sale.id}?t=${sale.share_token}`);
+  lines.push(`📄 Invoice PDF: ${window.location.origin}/api/public/invoice/${sale.id}/pdf?t=${sale.share_token}`);
   lines.push('_Sent via MediStock_');
   return 'https://wa.me/' + to + '?text=' + encodeURIComponent(lines.join('\n'));
 }
