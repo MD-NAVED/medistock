@@ -75,9 +75,9 @@ function buildRows(parsed, mapping) {
 }
 
 function rowProblem(r) {
-  if (!r.name) return 'Medicine name khali hai';
+  if (!r.name) return 'Medicine name is empty';
   const qty = Number(String(r.quantity).replace(/[₹,\s]/g, ''));
-  if (qty > 0 && !toISODate(r.expiry_date)) return 'Expiry date samajh nahi aayi — stock skip hoga';
+  if (qty > 0 && !toISODate(r.expiry_date)) return 'Expiry date not readable — its stock will be skipped';
   return null;
 }
 
@@ -113,12 +113,12 @@ export default function ImportData({ onImported }) {
       const dataUrl = await new Promise((resolve, reject) => {
         const fr = new FileReader();
         fr.onload = () => resolve(String(fr.result));
-        fr.onerror = () => reject(new Error('File padhi nahi ja rahi'));
+        fr.onerror = () => reject(new Error('Could not read the file'));
         fr.readAsDataURL(file);
       });
       const file_base64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
       const res = await api('/api/import/parse', { method: 'POST', body: { file_base64 } });
-      if (!res.rows.length) throw new Error('File mein koi data rows nahi mili');
+      if (!res.rows.length) throw new Error('No data rows found in the file');
       const auto = {};
       FIELDS.forEach((f) => { auto[f.key] = guessField(f.key, res.headers); });
       setParsed(res);
@@ -156,7 +156,7 @@ export default function ImportData({ onImported }) {
       setStep('done');
       onImported?.();
     } catch (e) {
-      setError(e.message + ' — chunk ' + chunkNo + ' mein problem. Baaki data import ho chuka hai, dobara try karein.');
+      setError(e.message + ' — problem in chunk ' + chunkNo + '. The rest is already imported, please try again.');
       setStep('map');
     } finally {
       setBusy(false);
@@ -172,11 +172,11 @@ export default function ImportData({ onImported }) {
       {step === 'upload' && (
         <Paper sx={{ p: { xs: 2, md: 3 } }}>
           <Alert severity="info" sx={{ mb: 2 }}>
-            <AlertTitle>Purane software ka data idhar layein</AlertTitle>
-            Marg / TradeEasy / kisi bhi software se <b>items ki Excel/CSV list export</b> karke
-            upload karein. MediStock columns khud pehchan lega — naam, company, MRP, batch,
-            expiry aur stock sab. Doosri dukaan ka pura stock batch-wise aayega, isliye expiry
-            alerts aur FEFO billing pehle din se sahi chalenge.
+            <AlertTitle>Bring data from your old software</AlertTitle>
+            Export the <b>items list from Marg / TradeEasy / any software as Excel or CSV</b>
+            and upload it here. MediStock detects the columns automatically — name, company,
+            MRP, batch, expiry and stock. Existing stock comes in batch-wise, so expiry alerts
+            and FEFO billing work correctly from day one.
           </Alert>
           <input
             ref={fileRef} type="file" hidden accept=".xlsx,.xls,.csv"
@@ -184,7 +184,7 @@ export default function ImportData({ onImported }) {
           />
           <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
             <Button variant="contained" size="large" startIcon={<UploadFileIcon />} onClick={() => fileRef.current?.click()} disabled={busy}>
-              {busy ? 'Padha ja raha hai…' : 'Excel / CSV file choose karein'}
+              {busy ? 'Reading file…' : 'Choose Excel / CSV file'}
             </Button>
             <Button
               startIcon={<DownloadIcon />}
@@ -194,7 +194,7 @@ export default function ImportData({ onImported }) {
                 ['Ascoril LS Syrup', 'Glenmark', 'Syrup', 'B1', '12', '98.00', '125.00', 'AS118', '05/2026', '24'],
               ])}
             >
-              Sample template download karein
+              Download sample template
             </Button>
           </Stack>
           {busy && <LinearProgress sx={{ mt: 2 }} />}
@@ -203,10 +203,10 @@ export default function ImportData({ onImported }) {
 
       {step === 'map' && parsed && (
         <Paper sx={{ p: { xs: 2, md: 3 } }}>
-          <Typography variant="h6" sx={{ mb: 0.5 }}>Step 2 — Columns milayein</Typography>
+          <Typography variant="h6" sx={{ mb: 0.5 }}>Step 2 — Match columns</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            File: <b>{parsed.sheet}</b> sheet, <b>{parsed.rows.length}</b> rows. MediStock ne
-            khud guess kiya hai — galat ho to dropdown se sahi column chunein.
+            File: <b>{parsed.sheet}</b> sheet, <b>{parsed.rows.length}</b> rows. MediStock
+            guessed these automatically — pick a different column if any is wrong.
           </Typography>
           <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 2 }}>
             {FIELDS.map((f) => (
@@ -216,14 +216,14 @@ export default function ImportData({ onImported }) {
                 value={mapping[f.key] || ''}
                 onChange={(e) => setMapping({ ...mapping, [f.key]: e.target.value })}
               >
-                <MenuItem value=""><em>— Nahi hai —</em></MenuItem>
+                <MenuItem value=""><em>— Not present —</em></MenuItem>
                 {parsed.headers.map((h) => <MenuItem key={h} value={h}>{h}</MenuItem>)}
               </TextField>
             ))}
           </Box>
           <Stack direction="row" spacing={1.5} sx={{ mt: 3 }}>
             <Button variant="contained" disabled={!mapping.name || busy} onClick={() => setStep('preview')}>
-              Preview dekhein ({okCount} rows ready)
+              Preview ({okCount} rows ready)
             </Button>
             <Button onClick={reset}>Cancel</Button>
           </Stack>
@@ -235,8 +235,8 @@ export default function ImportData({ onImported }) {
         <Paper sx={{ p: { xs: 2, md: 3 } }}>
           <Typography variant="h6" sx={{ mb: 1 }}>Step 3 — Preview</Typography>
           <Stack direction="row" spacing={1} sx={{ mb: 2, flexWrap: 'wrap', gap: 1 }}>
-            <Chip label={`${okCount} rows theek`} color="success" variant="outlined" />
-            {mapped.length - okCount > 0 && <Chip label={`${mapped.length - okCount} rows skip hongi`} color="warning" variant="outlined" />}
+            <Chip label={`${okCount} rows ready`} color="success" variant="outlined" />
+            {mapped.length - okCount > 0 && <Chip label={`${mapped.length - okCount} rows will be skipped`} color="warning" variant="outlined" />}
             {mapping.batch_no && mapping.quantity && <Chip label="Stock batch-wise import hoga" color="info" variant="outlined" />}
           </Stack>
           <Box sx={{ maxHeight: 340, overflow: 'auto', border: '1px solid #e0e6e4', borderRadius: 1 }}>
@@ -269,12 +269,12 @@ export default function ImportData({ onImported }) {
               </TableBody>
             </Table>
           </Box>
-          {mapped.length > 100 && <Typography variant="caption" color="text.secondary">…aur {mapped.length - 100} rows</Typography>}
+          {mapped.length > 100 && <Typography variant="caption" color="text.secondary">…and {mapped.length - 100} more rows</Typography>}
           <Stack direction="row" spacing={1.5} sx={{ mt: 3 }}>
             <Button variant="contained" color="success" disabled={busy || !okCount} onClick={runImport}>
-              {busy ? `Import ho raha hai… ${progress}%` : `Import karein (${okCount} rows)`}
+              {busy ? `Importing… ${progress}%` : `Import now (${okCount} rows)`}
             </Button>
-            <Button disabled={busy} onClick={() => setStep('map')}>Wapas</Button>
+            <Button disabled={busy} onClick={() => setStep('map')}>Back</Button>
           </Stack>
           {busy && <LinearProgress sx={{ mt: 2 }} />}
         </Paper>
@@ -285,12 +285,12 @@ export default function ImportData({ onImported }) {
           <CheckCircleIcon color="success" sx={{ fontSize: 56, mb: 1 }} />
           <Typography variant="h6" sx={{ mb: 2 }}>Import complete!</Typography>
           <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', sm: 'repeat(3, 1fr)' }, gap: 1.5, maxWidth: 560, mx: 'auto', mb: 2 }}>
-            <Chip label={`Naye medicines: ${summary.created}`} color="success" />
-            <Chip label={`Pehle se the: ${summary.existing}`} />
-            <Chip label={`Restore hue: ${summary.revived}`} />
-            <Chip label={`Naye batches: ${summary.batches_added}`} color="info" />
-            <Chip label={`Batches update: ${summary.batches_updated}`} color="info" />
-            <Chip label={`Stock skip: ${summary.stock_skipped}`} color={summary.stock_skipped ? 'warning' : 'default'} variant="outlined" />
+            <Chip label={`New medicines: ${summary.created}`} color="success" />
+            <Chip label={`Already existed: ${summary.existing}`} />
+            <Chip label={`Restored: ${summary.revived}`} />
+            <Chip label={`New batches: ${summary.batches_added}`} color="info" />
+            <Chip label={`Batches updated: ${summary.batches_updated}`} color="info" />
+            <Chip label={`Stock skipped: ${summary.stock_skipped}`} color={summary.stock_skipped ? 'warning' : 'default'} variant="outlined" />
           </Box>
           {summary.skipped.length > 0 && (
             <Alert severity="warning" sx={{ textAlign: 'left', mb: 2 }}>
@@ -299,10 +299,10 @@ export default function ImportData({ onImported }) {
             </Alert>
           )}
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Stock aur expiry alerts ab turant kaam karenge. Kuch galat import hua ho to Medicines
-            page se specific items hata sakte hain.
+            Stock and expiry alerts work immediately. If anything imported wrong, you can
+            remove specific items from the Medicines page.
           </Typography>
-          <Button variant="contained" onClick={() => { reset(); onImported?.(); }}>Ho gaya</Button>
+          <Button variant="contained" onClick={() => { reset(); onImported?.(); }}>Done</Button>
         </Paper>
       )}
     </Stack>

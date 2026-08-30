@@ -1286,15 +1286,15 @@ app.post('/api/import/parse', requireAuth, requireOwner, async (req, res, next) 
     try {
       wb = XLSX.read(Buffer.from(b64, 'base64'), { cellDates: true });
     } catch {
-      return bad(res, 400, 'File padha nahi ja saka — .xlsx, .xls ya .csv bhejein');
+      return bad(res, 400, 'Could not read the file — please use .xlsx, .xls or .csv');
     }
     const sheet = wb.Sheets[wb.SheetNames[0]];
-    if (!sheet) return bad(res, 400, 'File mein koi sheet nahi hai');
+    if (!sheet) return bad(res, 400, 'The file has no sheets');
     const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false, defval: '' });
-    if (matrix.length < 2) return bad(res, 400, 'File mein sirf header hai ya bilkul khali hai');
+    if (matrix.length < 2) return bad(res, 400, 'The file only has a header row or is empty');
 
     const headers = matrix[0].map((h) => String(h).trim());
-    if (headers.every((h) => !h)) return bad(res, 400, 'Pehli row column headers honi chahiye');
+    if (headers.every((h) => !h)) return bad(res, 400, 'The first row must be the column headers');
 
     const rows = [];
     for (let r = 1; r < matrix.length && rows.length < IMPORT_MAX_ROWS; r++) {
@@ -1390,7 +1390,7 @@ app.post('/api/import/commit', requireAuth, requireOwner, async (req, res, next)
           const expiryISO = importDateToISO(r.expiry_date);
           if (!expiryISO) {
             summary.stock_skipped++;
-            summary.skipped.push({ i: rowNum, reason: 'Stock add nahi hua — expiry date nahi padhi ja rahi (' + String(r.expiry_date || 'blank') + ')' });
+            summary.skipped.push({ i: rowNum, reason: 'Stock not added — expiry date not readable (' + String(r.expiry_date || 'blank') + ')' });
           } else {
             const bn = (String(r.batch_no || '').trim() || 'OPENING').slice(0, 255);
             const existing = (await client.query(
