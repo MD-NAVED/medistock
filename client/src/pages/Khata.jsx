@@ -12,7 +12,7 @@ import { api } from '../api';
 import { fmt, fmtDate, fmtDateTime } from '../utils';
 
 const KINDS = [
-  { value: 'credit', label: 'Credit Given (Udhaar)' },
+  { value: 'credit', label: 'Credit Given' },
   { value: 'payment', label: 'Payment Received' },
   { value: 'discount', label: 'Discount / Waiver' },
 ];

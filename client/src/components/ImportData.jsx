@@ -237,7 +237,7 @@ export default function ImportData({ onImported }) {
           <Stack direction="row" spacing={1} sx={{ mb: 2, flexWrap: 'wrap', gap: 1 }}>
             <Chip label={`${okCount} rows ready`} color="success" variant="outlined" />
             {mapped.length - okCount > 0 && <Chip label={`${mapped.length - okCount} rows will be skipped`} color="warning" variant="outlined" />}
-            {mapping.batch_no && mapping.quantity && <Chip label="Stock batch-wise import hoga" color="info" variant="outlined" />}
+            {mapping.batch_no && mapping.quantity && <Chip label="Stock will import batch-wise" color="info" variant="outlined" />}
           </Stack>
           <Box sx={{ maxHeight: 340, overflow: 'auto', border: '1px solid #e0e6e4', borderRadius: 1 }}>
             <Table size="small" stickyHeader>

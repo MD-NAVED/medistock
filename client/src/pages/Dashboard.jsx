@@ -85,7 +85,7 @@ export default function Dashboard() {
           disabled={waBusy}
           sx={{ textTransform: 'none', fontWeight: 700, bgcolor: '#25D366', '&:hover': { bgcolor: '#1eb85a' } }}
         >
-          {waBusy ? 'Ban raha hai…' : 'WhatsApp Summary'}
+          {waBusy ? 'Preparing…' : 'WhatsApp Summary'}
         </Button>
       </Box>
 
