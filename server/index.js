@@ -1087,15 +1087,19 @@ app.get('/api/public/invoice/:id/pdf', async (req, res, next) => {
     if (sale.customer_name) doc.text('Customer: ' + sale.customer_name);
     doc.moveDown(0.8);
 
-    // Items table (fixed columns within the 511pt printable width)
+    // Items table (fixed columns within the 511pt printable width).
+    // All header cells share one captured y — doc.y advances after every
+    // text() call, so reading it per-cell produces a staircase.
     const colItem = 42, colQty = 330, colRate = 395, colAmt = 475;
+    const headY = doc.y;
     doc.font('Helvetica-Bold').fontSize(9).fillColor('#000000');
-    doc.text('Item', colItem, doc.y);
-    doc.text('Qty', colQty, doc.y, { width: 55, align: 'center' });
-    doc.text('Rate', colRate, doc.y, { width: 70, align: 'right' });
-    doc.text('Amount', colAmt, doc.y, { width: 78, align: 'right' });
-    doc.moveTo(colItem, doc.y + 14).lineTo(553, doc.y + 14).strokeColor('#999999').stroke();
-    doc.moveDown(1);
+    doc.text('Item', colItem, headY);
+    doc.text('Qty', colQty, headY, { width: 55, align: 'center' });
+    doc.text('Rate', colRate, headY, { width: 70, align: 'right' });
+    doc.text('Amount', colAmt, headY, { width: 78, align: 'right' });
+    doc.y = headY + 16;
+    doc.moveTo(colItem, doc.y).lineTo(553, doc.y).strokeColor('#999999').stroke();
+    doc.y += 8;
 
     for (const it of items) {
       const yStart = doc.y;
