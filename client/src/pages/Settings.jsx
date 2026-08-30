@@ -15,6 +15,7 @@ import CloudDoneIcon from '@mui/icons-material/CloudDone';
 import { api } from '../api';
 import { useAuth } from '../auth';
 import { fmtDateTime } from '../utils';
+import ImportData from '../components/ImportData';
 
 export default function Settings() {
   const { user } = useAuth();
@@ -129,6 +130,7 @@ export default function Settings() {
           <Tab label="🏪 Store" />
           <Tab label={`👥 Users (${users.length})`} />
           <Tab label="🔐 Security" />
+          <Tab label="📥 Import Data" />
         </Tabs>
       </Paper>
 
@@ -195,6 +197,8 @@ export default function Settings() {
           ))}
         </Paper>
       )}
+
+      {tab === 3 && <ImportData />}
 
       {tab === 2 && (
         <Box sx={{ display: 'grid', gap: 3, maxWidth: 720 }}>

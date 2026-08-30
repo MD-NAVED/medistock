@@ -29,7 +29,7 @@ const LOCKOUT_MINUTES = 15;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 app.set('trust proxy', true);
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '15mb' })); // import upload sends the workbook as base64
 
 // Basic hardening headers. HTTPS itself is terminated by the hosting layer
 // (nginx/Caddy/cloud) — see README "Running securely".
@@ -1231,6 +1231,185 @@ app.post('/api/users/:id/reset-password', requireAuth, requireOwner, async (req,
     await setUserPassword(u.id, pw);
     await pool.query('DELETE FROM sessions WHERE user_id = $1', [u.id]); // force re-login
     res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ---------------------------------------------------------------------------
+// One-time data import (owner) — bring a shop's existing stock over from its
+// old software (Marg / TradeEasy / any Excel export). Two calls:
+//   POST /api/import/parse  — workbook (base64) → headers + raw rows
+//   POST /api/import/commit — mapped rows (≤300) → medicines + batches
+// The client maps columns and chunks the rows; each commit is one transaction.
+// ---------------------------------------------------------------------------
+const XLSX = require('xlsx');
+const IMPORT_MAX_ROWS = 5000;
+const IMPORT_CHUNK_LIMIT = 300;
+
+/* Accepts Date objects (cellDates), Excel serial days, and the common text
+   formats Indian ERPs export (DD/MM/YYYY, DD-MM-YYYY, DD.MM.YY, YYYY-MM-DD).
+   Returns 'YYYY-MM-DD' or null when the value cannot be understood. */
+function importDateToISO(v) {
+  if (v === null || v === undefined || v === '') return null;
+  if (v instanceof Date) {
+    return isNaN(v.getTime()) ? null : v.toISOString().slice(0, 10);
+  }
+  if (typeof v === 'number' && isFinite(v)) {
+    // Excel day serial (1900 epoch); clamp absurd values out
+    if (v < 20000 || v > 80000) return null;
+    return new Date(Math.round((v - 25569) * 86400000)).toISOString().slice(0, 10);
+  }
+  const s = String(v).trim();
+  let m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(s);
+  if (!m) m = /^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/.exec(s);
+  if (!m) return null;
+  let y, mo, d;
+  if (/^\d{4}-/.test(s)) { y = +m[1]; mo = +m[2]; d = +m[3]; }
+  else { d = +m[1]; mo = +m[2]; y = +m[3]; if (y < 100) y += 2000; }
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
+  return dt.toISOString().slice(0, 10);
+}
+
+/* Loose number reader: tolerates ₹, commas, spaces ("1,250.50"). */
+function importNumber(v) {
+  if (v === null || v === undefined || v === '') return NaN;
+  if (typeof v === 'number') return isFinite(v) ? v : NaN;
+  const n = Number(String(v).replace(/[₹,\s]/g, ''));
+  return isFinite(n) ? n : NaN;
+}
+
+app.post('/api/import/parse', requireAuth, requireOwner, async (req, res, next) => {
+  try {
+    const b64 = String((req.body || {}).file_base64 || '');
+    if (!b64) return bad(res, 400, 'No file received');
+    let wb;
+    try {
+      wb = XLSX.read(Buffer.from(b64, 'base64'), { cellDates: true });
+    } catch {
+      return bad(res, 400, 'File padha nahi ja saka — .xlsx, .xls ya .csv bhejein');
+    }
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    if (!sheet) return bad(res, 400, 'File mein koi sheet nahi hai');
+    const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false, defval: '' });
+    if (matrix.length < 2) return bad(res, 400, 'File mein sirf header hai ya bilkul khali hai');
+
+    const headers = matrix[0].map((h) => String(h).trim());
+    if (headers.every((h) => !h)) return bad(res, 400, 'Pehli row column headers honi chahiye');
+
+    const rows = [];
+    for (let r = 1; r < matrix.length && rows.length < IMPORT_MAX_ROWS; r++) {
+      const cells = {};
+      let any = false;
+      headers.forEach((h, c) => {
+        if (!h) return;
+        const v = matrix[r][c];
+        let out;
+        if (v instanceof Date && !isNaN(v.getTime())) out = v.toISOString().slice(0, 10);
+        else if (v === null || v === undefined) out = '';
+        else out = String(v).trim();
+        cells[h] = out;
+        if (out !== '') any = true;
+      });
+      if (any) rows.push({ i: r + 1, cells });
+    }
+    res.json({ sheet: wb.SheetNames[0], headers: headers.filter(Boolean), rows });
+  } catch (e) { next(e); }
+});
+
+app.post('/api/import/commit', requireAuth, requireOwner, async (req, res, next) => {
+  try {
+    const rows = Array.isArray((req.body || {}).rows) ? req.body.rows : [];
+    if (!rows.length) return bad(res, 400, 'No rows to import');
+    if (rows.length > IMPORT_CHUNK_LIMIT) return bad(res, 400, 'Send at most 300 rows per request');
+
+    // One companies snapshot per chunk — same slug+aliases matching as
+    // resolveCompanyLogo, without a query per row.
+    const companies = (await pool.query('SELECT name, aliases, logo_url FROM companies')).rows;
+    const logoFor = (companyName) => {
+      const key = slugify(companyName);
+      if (!key) return null;
+      for (const c of companies) {
+        const keys = [c.name, ...String(c.aliases || '').split(',')].map(slugify).filter(Boolean);
+        if (keys.includes(key)) return c.logo_url || null;
+      }
+      return null;
+    };
+
+    const summary = { created: 0, revived: 0, existing: 0, batches_added: 0, batches_updated: 0, stock_skipped: 0, skipped: [] };
+
+    await transaction(async (client) => {
+      const medCache = new Map();
+      for (let idx = 0; idx < rows.length; idx++) {
+        const r = rows[idx] || {};
+        const rowNum = Number(r.i) || idx + 1;
+        const nm = String(r.name || '').trim();
+        const co = (String(r.company || '').trim() || 'General');
+        if (!nm) { summary.skipped.push({ i: rowNum, reason: 'Medicine name missing' }); continue; }
+
+        const cacheKey = nm.toLowerCase() + '|' + co.toLowerCase();
+        let med = medCache.get(cacheKey);
+        if (med === undefined) {
+          const found = (await client.query(
+            'SELECT id, active FROM medicines WHERE lower(name) = lower($1) AND lower(company) = lower($2) ORDER BY id LIMIT 1',
+            [nm, co]
+          )).rows[0];
+          med = found || null;
+          medCache.set(cacheKey, med);
+        }
+
+        if (!med) {
+          const type = (String(r.type || '').trim() || 'Tablet').slice(0, 100);
+          const shelf = (String(r.shelf || '').trim() || '').slice(0, 50);
+          const buy = Math.max(0, importNumber(r.buy_price) || 0);
+          const sell = Math.max(0, importNumber(r.sell_price) || 0);
+          let gst = importNumber(r.gst_rate);
+          if (!isFinite(gst) || gst < 0 || gst > 100) gst = 12;
+          const ins = await client.query(
+            'INSERT INTO medicines (name, company, type, shelf, buy_price, sell_price, gst_rate, low_stock_threshold, logo_url) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id',
+            [nm, co, type, shelf, buy, sell, gst, 10, logoFor(co)]
+          );
+          med = { id: ins.rows[0].id, active: 1 };
+          medCache.set(cacheKey, med);
+          summary.created++;
+        } else if (med.active !== 1) {
+          // Same name+company was removed earlier — revive with the imported values
+          await client.query(
+            'UPDATE medicines SET active = 1, type = $1, shelf = $2, buy_price = $3, sell_price = $4, gst_rate = $5 WHERE id = $6',
+            [(String(r.type || '').trim() || 'Tablet').slice(0, 100), (String(r.shelf || '').trim() || '').slice(0, 50),
+             Math.max(0, importNumber(r.buy_price) || 0), Math.max(0, importNumber(r.sell_price) || 0),
+             (importNumber(r.gst_rate) >= 0 && importNumber(r.gst_rate) <= 100 ? importNumber(r.gst_rate) : 12), med.id]
+          );
+          med.active = 1;
+          summary.revived++;
+        } else {
+          summary.existing++;
+        }
+
+        const qty = Math.trunc(importNumber(r.quantity));
+        if (qty > 0) {
+          const expiryISO = importDateToISO(r.expiry_date);
+          if (!expiryISO) {
+            summary.stock_skipped++;
+            summary.skipped.push({ i: rowNum, reason: 'Stock add nahi hua — expiry date nahi padhi ja rahi (' + String(r.expiry_date || 'blank') + ')' });
+          } else {
+            const bn = (String(r.batch_no || '').trim() || 'OPENING').slice(0, 255);
+            const existing = (await client.query(
+              'SELECT id FROM batches WHERE medicine_id = $1 AND batch_number = $2',
+              [med.id, bn]
+            )).rows[0];
+            if (existing) {
+              await client.query('UPDATE batches SET quantity = quantity + $1, expiry_date = $2 WHERE id = $3', [qty, expiryISO, existing.id]);
+              summary.batches_updated++;
+            } else {
+              await client.query('INSERT INTO batches (medicine_id, batch_number, expiry_date, quantity) VALUES ($1, $2, $3, $4)', [med.id, bn, expiryISO, qty]);
+              summary.batches_added++;
+            }
+          }
+        }
+      }
+    });
+
+    res.json(summary);
   } catch (e) { next(e); }
 });
 
