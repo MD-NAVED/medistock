@@ -8,11 +8,36 @@ import {
 import AddShoppingCartIcon from '@mui/icons-material/AddShoppingCart';
 import DeleteIcon from '@mui/icons-material/Delete';
 import PointOfSaleIcon from '@mui/icons-material/PointOfSale';
+import WhatsAppIcon from '@mui/icons-material/WhatsApp';
 import PrintIcon from '@mui/icons-material/Print';
 import LocalPharmacyRoundedIcon from '@mui/icons-material/LocalPharmacyRounded';
 import { api } from '../api';
 import { printInvoice } from '../printInvoice';
 import { fmt, fmtDate } from '../utils';
+
+const digitsOnly = (s) => String(s || '').replace(/\D/g, '');
+
+/* wa.me deep link with the formatted bill + the hosted invoice page link. */
+function buildWhatsAppLink(invoice, storeName) {
+  const { sale, items } = invoice;
+  const digits = digitsOnly(sale.customer_phone);
+  const to = digits.length === 10 ? '91' + digits : digits;
+  const lines = [
+    `🧾 *${storeName}* — Invoice ${sale.invoice_number}`,
+    `📅 ${sale.created_at}`,
+  ];
+  if (sale.customer_name) lines.push(`👤 ${sale.customer_name}`);
+  lines.push('──────────────');
+  items.forEach((it) => lines.push(`• ${it.medicine_name} × ${it.quantity} = ₹${Number(it.line_total).toFixed(2)}`));
+  lines.push('──────────────');
+  lines.push(`Subtotal: ₹${Number(sale.subtotal).toFixed(2)}`);
+  if (Number(sale.gst_amount) > 0) lines.push(`GST: ₹${Number(sale.gst_amount).toFixed(2)}`);
+  lines.push(`*TOTAL: ₹${Number(sale.total).toFixed(2)}*`);
+  lines.push('');
+  lines.push(`🔗 Full invoice (PDF): ${window.location.origin}/invoice/${sale.id}?t=${sale.share_token}`);
+  lines.push('_Sent via MediStock_');
+  return 'https://wa.me/' + to + '?text=' + encodeURIComponent(lines.join('\n'));
+}
 import MedicineLogo from '../components/MedicineLogo';
 
 export default function Billing() {
@@ -23,6 +48,7 @@ export default function Billing() {
   const [qty, setQty] = useState(1);
   const [cart, setCart] = useState([]);
   const [customer, setCustomer] = useState('');
+  const [phone, setPhone] = useState('');
   const [udhaar, setUdhaar] = useState(false);
   const [udhaarAmt, setUdhaarAmt] = useState('');
   const [busy, setBusy] = useState(false);
@@ -79,7 +105,7 @@ export default function Billing() {
     try {
       const data = await api('/api/sales', {
         method: 'POST',
-        body: { customer_name: customer, items: cart.map((c) => ({ medicine_id: c.id, quantity: c.qty })) },
+        body: { customer_name: customer, customer_phone: phone, items: cart.map((c) => ({ medicine_id: c.id, quantity: c.qty })) },
       });
       // Bill is already saved — a failed khata entry must never lose the sale,
       // so it is reported as a warning instead of throwing.
@@ -103,6 +129,7 @@ export default function Billing() {
       setInvoice(data);
       setCart([]);
       setCustomer('');
+      setPhone('');
       setUdhaar(false);
       setUdhaarAmt('');
       loadMedicines();
@@ -259,6 +286,10 @@ export default function Billing() {
         <Paper sx={{ p: { xs: 2, md: 3 }, width: { xs: '100%', md: 330 }, position: { xs: 'static', md: 'sticky' }, top: 90 }}>
           <Typography variant="h6" sx={{ mb: 2 }}>Bill Summary</Typography>
           <TextField label="Customer name (optional)" size="small" fullWidth value={customer} onChange={(e) => setCustomer(e.target.value)} sx={{ mb: 1.5 }} />
+          <TextField label="WhatsApp number (optional)" size="small" fullWidth value={phone}
+            onChange={(e) => setPhone(e.target.value.replace(/[^\d+ ]/g, ''))}
+            placeholder="10-digit mobile — bill goes on WhatsApp"
+            helperText="Send the bill on WhatsApp after checkout" />
           <FormControlLabel
             control={<Checkbox checked={udhaar} onChange={(e) => setUdhaar(e.target.checked)} size="small" />}
             label={<Typography variant="body2">Record on Credit (Khata)</Typography>}
@@ -318,11 +349,21 @@ export default function Billing() {
                 Latest expiry sold: {fmtDate(invoice.items.map((i) => i.expiry_date).sort()[0])}
               </Typography>
             </DialogContent>
-            <DialogActions sx={{ justifyContent: 'center', pb: 3 }}>
+            <DialogActions sx={{ justifyContent: 'center', pb: 3, flexWrap: 'wrap', gap: 1 }}>
               <Button variant="outlined" onClick={() => setInvoice(null)}>New Sale</Button>
               <Button variant="contained" startIcon={<PrintIcon />} onClick={() => printInvoice(settings, invoice.sale, invoice.items)}>
                 Print Bill
               </Button>
+              {digitsOnly(invoice.sale.customer_phone).length >= 10 && (
+                <Button
+                  variant="contained" color="success"
+                  startIcon={<WhatsAppIcon />}
+                  href={buildWhatsAppLink(invoice, settings?.store_name || 'MediStock Pharmacy')}
+                  target="_blank" rel="noopener noreferrer"
+                >
+                  Send on WhatsApp
+                </Button>
+              )}
             </DialogActions>
           </>
         )}

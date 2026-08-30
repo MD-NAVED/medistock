@@ -90,6 +90,7 @@ CREATE TABLE IF NOT EXISTS sales (
   invoice_number VARCHAR(255) UNIQUE NOT NULL,
   user_id        INTEGER NOT NULL REFERENCES users(id),
   customer_name  TEXT NOT NULL DEFAULT '',
+  customer_phone VARCHAR(20) NOT NULL DEFAULT '',
   subtotal       NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
   gst_amount     NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
   total          NUMERIC(12, 2) NOT NULL DEFAULT 0.00,

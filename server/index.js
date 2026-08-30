@@ -28,6 +28,16 @@ const MAX_FAILED_LOGINS = 8;      // per username
 const LOCKOUT_MINUTES = 15;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+/* Shareable invoice links: an unguessable token per sale so customers can open
+   their bill without logging in. Derived from DATABASE_URL instead of stored —
+   rotating the database rotates old links, which is acceptable. */
+const INVOICE_SECRET = crypto.createHash('sha256')
+  .update(String(process.env.DATABASE_URL || '') + '|medistock-invoice-share')
+  .digest('hex');
+function invoiceToken(saleId) {
+  return crypto.createHmac('sha256', INVOICE_SECRET).update(String(saleId)).digest('hex').slice(0, 24);
+}
+
 app.set('trust proxy', true);
 app.use(express.json({ limit: '15mb' })); // import upload sends the workbook as base64
 
@@ -648,7 +658,7 @@ app.put('/api/purchases/:id', requireAuth, requireOwner, async (req, res, next) 
 // ---------------------------------------------------------------------------
 app.post('/api/sales', requireAuth, async (req, res, next) => {
   try {
-    const { items, customer_name } = req.body || {};
+    const { items, customer_name, customer_phone } = req.body || {};
     if (!Array.isArray(items) || !items.length) return bad(res, 400, 'Cart is empty');
     for (const it of items) {
       if (!Number.isInteger(Number(it.quantity)) || Number(it.quantity) <= 0)
@@ -657,13 +667,14 @@ app.post('/api/sales', requireAuth, async (req, res, next) => {
     const settings = (await pool.query('SELECT * FROM settings WHERE id = 1')).rows[0];
     const gstEnabled = !!settings?.gst_enabled;
     const custName = String(customer_name || '').trim();
+    const custPhone = String(customer_phone || '').replace(/[^\d+]/g, '').slice(0, 20);
 
     const result = await transaction(async (client) => {
       const maxId = (await client.query('SELECT COALESCE(MAX(id), 0) AS m FROM sales')).rows[0].m + 1;
       const invNo = 'INV-' + new Date().toISOString().slice(0, 10).replaceAll('-', '') + '-' + String(maxId).padStart(4, '0') + '-' + crypto.randomInt(1000, 10000);
       const sr = await client.query(
-        'INSERT INTO sales (invoice_number, user_id, customer_name, subtotal, gst_amount, total) VALUES ($1, $2, $3, 0, 0, 0) RETURNING id',
-        [invNo, req.user.id, custName]
+        'INSERT INTO sales (invoice_number, user_id, customer_name, customer_phone, subtotal, gst_amount, total) VALUES ($1, $2, $3, $4, 0, 0, 0) RETURNING id',
+        [invNo, req.user.id, custName, custPhone]
       );
       const saleId = sr.rows[0].id;
 
@@ -709,8 +720,10 @@ app.post('/api/sales', requireAuth, async (req, res, next) => {
     });
     res.json({
       sale: { id: result.saleId, invoice_number: result.invNo, customer_name: custName,
+              customer_phone: custPhone,
               subtotal: result.subtotal, gst_amount: result.gstAmount, total: result.subtotal + result.gstAmount,
-              created_at: new Date().toISOString().slice(0, 19).replace('T', ' '), served_by: req.user.name },
+              created_at: new Date().toISOString().slice(0, 19).replace('T', ' '), served_by: req.user.name,
+              share_token: invoiceToken(result.saleId) },
       items: result.outItems,
     });
   } catch (e) {
@@ -998,6 +1011,38 @@ app.post('/api/khata/entries', requireAuth, async (req, res, next) => {
 // same net-quantity math as reports); the client just opens a wa.me share
 // link with it, so no WhatsApp API account or per-message cost is involved.
 // ---------------------------------------------------------------------------
+// Public, token-gated invoice view — the link a customer opens from WhatsApp.
+// No auth: the 24-char HMAC token per sale is the credential.
+app.get('/api/public/invoice/:id', async (req, res, next) => {
+  try {
+    const id = asId(req.params.id);
+    const t = String(req.query.t || '');
+    if (!id || !t || t !== invoiceToken(id)) return bad(res, 404, 'Invoice not found');
+
+    const sale = (await pool.query(
+      'SELECT id, invoice_number, customer_name, subtotal::float8 AS subtotal, gst_amount::float8 AS gst_amount, total::float8 AS total, status, created_at FROM sales WHERE id = $1',
+      [id]
+    )).rows[0];
+    if (!sale || sale.status === 'cancelled') return bad(res, 404, 'Invoice not found');
+
+    const settings = (await pool.query('SELECT store_name, phone, store_address, gst_number FROM settings WHERE id = 1')).rows[0] || {};
+    const items = (await pool.query(
+      'SELECT medicine_name, company, batch_number, expiry_date, quantity, unit_price::float8 AS unit_price, gst_rate::float8 AS gst_rate, line_total::float8 AS line_total FROM sale_items WHERE sale_id = $1 ORDER BY id',
+      [id]
+    )).rows;
+
+    res.json({
+      sale, items,
+      store: {
+        name: settings.store_name || 'MediStock Pharmacy',
+        phone: settings.phone || '',
+        address: settings.store_address || '',
+        gstin: settings.gst_number || '',
+      },
+    });
+  } catch (e) { next(e); }
+});
+
 app.get('/api/whatsapp/summary', requireAuth, async (req, res, next) => {
   try {
     const [today, purchases, month, low, expiring, khata, settings] = await Promise.all([

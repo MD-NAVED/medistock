@@ -15,6 +15,7 @@ import Alerts from './pages/Alerts';
 import Reports from './pages/Reports';
 import Settings from './pages/Settings';
 import Companies from './pages/Companies';
+import InvoiceView from './pages/InvoiceView';
 
 export default function App() {
   return (
@@ -25,6 +26,7 @@ export default function App() {
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/signup" element={<SignUp />} />
+            <Route path="/invoice/:id" element={<InvoiceView />} />
             <Route element={<RequireAuth />}>
               <Route path="/" element={<AppLayout />}>
                 <Route index element={<Dashboard />} />
