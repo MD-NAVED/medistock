@@ -1388,7 +1388,8 @@ const IMPORT_MAX_ROWS = 5000;
 const IMPORT_CHUNK_LIMIT = 300;
 
 /* Accepts Date objects (cellDates), Excel serial days, and the common text
-   formats Indian ERPs export (DD/MM/YYYY, DD-MM-YYYY, DD.MM.YY, YYYY-MM-DD).
+   formats Indian ERPs export (DD/MM/YYYY, DD-MM-YYYY, DD.MM.YY, YYYY-MM-DD,
+   MM/YYYY, M/YYYY, MM-YYYY, M-YYYY).
    Returns 'YYYY-MM-DD' or null when the value cannot be understood. */
 function importDateToISO(v) {
   if (v === null || v === undefined || v === '') return null;
@@ -1401,11 +1402,15 @@ function importDateToISO(v) {
     return new Date(Math.round((v - 25569) * 86400000)).toISOString().slice(0, 10);
   }
   const s = String(v).trim();
+  // Full date: YYYY-MM-DD or DD/MM/YYYY, DD-MM-YYYY, DD.MM.YY
   let m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(s);
   if (!m) m = /^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/.exec(s);
+  // Month/Year only: MM/YYYY, M/YYYY, MM-YYYY, M-YYYY (common for pharma expiry)
+  if (!m) m = /^(\d{1,2})[\/\-](\d{4})$/.exec(s);
   if (!m) return null;
   let y, mo, d;
   if (/^\d{4}-/.test(s)) { y = +m[1]; mo = +m[2]; d = +m[3]; }
+  else if (m[1].length <= 2 && m[2].length === 4) { mo = +m[1]; y = +m[2]; d = 1; } // MM/YYYY -> 1st of month
   else { d = +m[1]; mo = +m[2]; y = +m[3]; if (y < 100) y += 2000; }
   const dt = new Date(Date.UTC(y, mo - 1, d));
   if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
