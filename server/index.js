@@ -1561,6 +1561,286 @@ app.post('/api/import/commit', requireAuth, requireOwner, async (req, res, next)
 });
 
 // ---------------------------------------------------------------------------
+// SaaS Founder Platform Management (Developer / Superadmin Console)
+// Controls all 100+ pharmacy clients (tenants), subscriptions, MRR & kill-switch
+// ---------------------------------------------------------------------------
+
+async function ensureTenantsTable() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS tenants (
+        id SERIAL PRIMARY KEY,
+        store_name TEXT NOT NULL,
+        owner_name TEXT NOT NULL,
+        phone VARCHAR(30) NOT NULL,
+        email VARCHAR(255) DEFAULT '',
+        city VARCHAR(100) DEFAULT '',
+        state VARCHAR(100) DEFAULT '',
+        address TEXT DEFAULT '',
+        license_number VARCHAR(100) DEFAULT '',
+        plan VARCHAR(50) NOT NULL DEFAULT 'trial',
+        status VARCHAR(50) NOT NULL DEFAULT 'trial',
+        price_per_month NUMERIC(10, 2) NOT NULL DEFAULT 999.00,
+        trial_ends_at TIMESTAMPTZ NOT NULL DEFAULT (CURRENT_TIMESTAMP + interval '30 days'),
+        subscription_ends_at TIMESTAMPTZ,
+        total_bills INTEGER NOT NULL DEFAULT 0,
+        total_medicines INTEGER NOT NULL DEFAULT 0,
+        last_active_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Seed realistic pharmacy clients if empty
+    const { rows } = await pool.query('SELECT COUNT(*)::int AS count FROM tenants');
+    if (rows[0].count === 0) {
+      await pool.query(`
+        INSERT INTO tenants (store_name, owner_name, phone, city, state, license_number, plan, status, price_per_month, trial_ends_at, subscription_ends_at, total_bills, total_medicines, last_active_at, created_at)
+        VALUES
+          ('Apollo Medicos', 'Suresh Sharma', '+91 98234 11223', 'Mumbai', 'Maharashtra', 'DL-MH-2024-991', 'monthly', 'active', 999.00, now() - interval '60 days', now() + interval '24 days', 1420, 850, now() - interval '10 minutes', now() - interval '90 days'),
+          ('Gupta Chemist & Druggist', 'Rajesh Gupta', '+91 98111 22334', 'Delhi', 'Delhi', 'DL-DL-2024-442', 'monthly', 'active', 999.00, now() - interval '45 days', now() + interval '12 days', 980, 620, now() - interval '25 minutes', now() - interval '75 days'),
+          ('City Pharmacy & Surgical', 'Mohammed Naved', '+91 99887 76655', 'Lucknow', 'Uttar Pradesh', 'DL-UP-2024-118', 'yearly', 'active', 833.00, now() - interval '120 days', now() + interval '210 days', 3420, 1420, now() - interval '5 minutes', now() - interval '150 days'),
+          ('Al-Shifa Medical Store', 'Dr. Farhan Ali', '+91 97654 32109', 'Hyderabad', 'Telangana', 'DL-TS-2024-773', 'monthly', 'active', 999.00, now() - interval '30 days', now() + interval '2 days', 640, 480, now() - interval '1 hour', now() - interval '60 days'),
+          ('Metro Care Pharmacy', 'Anil Verma', '+91 98333 44556', 'Bangalore', 'Karnataka', 'DL-KA-2024-301', 'trial', 'trial', 999.00, now() + interval '3 days', null, 145, 230, now() - interval '2 hours', now() - interval '27 days'),
+          ('Sharma Medical Hall', 'Vikram Sharma', '+91 98777 66554', 'Jaipur', 'Rajasthan', 'DL-RJ-2024-812', 'trial', 'trial', 999.00, now() + interval '18 days', null, 82, 190, now() - interval '4 hours', now() - interval '12 days'),
+          ('Modern Chemist', 'Amit Patel', '+91 98980 12345', 'Ahmedabad', 'Gujarat', 'DL-GJ-2024-521', 'monthly', 'active', 999.00, now() - interval '90 days', now() + interval '18 days', 1890, 950, now() - interval '30 minutes', now() - interval '120 days'),
+          ('Kolkata Life Care', 'Subhash Bose', '+91 98310 98765', 'Kolkata', 'West Bengal', 'DL-WB-2024-609', 'trial', 'trial', 999.00, now() + interval '1 day', null, 110, 310, now() - interval '3 hours', now() - interval '29 days'),
+          ('Janata Aushadhi Kendra', 'Pankaj Tiwari', '+91 94500 11223', 'Varanasi', 'Uttar Pradesh', 'DL-UP-2024-904', 'trial', 'expired', 999.00, now() - interval '4 days', null, 95, 140, now() - interval '5 days', now() - interval '34 days'),
+          ('National Pharmacy', 'Sunil Deshmukh', '+91 98220 55443', 'Pune', 'Maharashtra', 'DL-MH-2024-114', 'monthly', 'suspended', 999.00, now() - interval '60 days', now() - interval '8 days', 430, 290, now() - interval '8 days', now() - interval '80 days')
+      `);
+    }
+  } catch (err) {
+    console.error('ensureTenantsTable error:', err);
+  }
+}
+ensureTenantsTable();
+
+// 1. Founder Platform Summary (MRR, Total Tenants, Active Subscriptions, Expiring Trials)
+app.get('/api/founder/stats', requireAuth, requireOwner, async (req, res, next) => {
+  try {
+    await ensureTenantsTable();
+    const statsQuery = await pool.query(`
+      SELECT
+        COUNT(*)::int AS total_tenants,
+        COUNT(*) FILTER (WHERE status = 'active')::int AS active_tenants,
+        COUNT(*) FILTER (WHERE status = 'trial' AND trial_ends_at > now())::int AS trial_tenants,
+        COUNT(*) FILTER (WHERE status = 'expired' OR (status = 'trial' AND trial_ends_at <= now()))::int AS expired_tenants,
+        COUNT(*) FILTER (WHERE status = 'suspended')::int AS suspended_tenants,
+        COUNT(*) FILTER (WHERE status = 'trial' AND trial_ends_at BETWEEN now() AND now() + interval '3 days')::int AS expiring_soon_trials,
+        COALESCE(SUM(CASE WHEN status = 'active' THEN price_per_month ELSE 0 END), 0)::float8 AS mrr,
+        COALESCE(SUM(total_bills), 0)::int AS platform_total_bills,
+        COALESCE(SUM(total_medicines), 0)::int AS platform_total_medicines
+      FROM tenants
+    `);
+
+    const row = statsQuery.rows[0];
+    const arr = row.mrr * 12;
+
+    res.json({
+      totalTenants: row.total_tenants,
+      activeTenants: row.active_tenants,
+      trialTenants: row.trial_tenants,
+      expiredTenants: row.expired_tenants,
+      suspendedTenants: row.suspended_tenants,
+      expiringSoonTrials: row.expiring_soon_trials,
+      mrr: row.mrr,
+      arr,
+      platformTotalBills: row.platform_total_bills,
+      platformTotalMedicines: row.platform_total_medicines,
+    });
+  } catch (e) { next(e); }
+});
+
+// 2. Tenants Directory List with Search & Status Filter
+app.get('/api/founder/tenants', requireAuth, requireOwner, async (req, res, next) => {
+  try {
+    await ensureTenantsTable();
+    const q = String(req.query.q || '').trim();
+    const status = String(req.query.status || 'all').trim();
+    const like = '%' + q + '%';
+
+    let query = `
+      SELECT
+        id, store_name, owner_name, phone, email, city, state, license_number,
+        plan, status, price_per_month::float8 AS price_per_month,
+        trial_ends_at, subscription_ends_at, total_bills, total_medicines,
+        last_active_at, created_at,
+        ROUND(EXTRACT(EPOCH FROM (trial_ends_at - now())) / 86400)::int AS trial_days_left,
+        ROUND(EXTRACT(EPOCH FROM (subscription_ends_at - now())) / 86400)::int AS sub_days_left
+      FROM tenants
+      WHERE (store_name ILIKE $1 OR owner_name ILIKE $1 OR phone ILIKE $1 OR city ILIKE $1)
+    `;
+    const params = [like];
+
+    if (status === 'active') {
+      query += ` AND status = 'active'`;
+    } else if (status === 'trial') {
+      query += ` AND status = 'trial' AND trial_ends_at > now()`;
+    } else if (status === 'expiring') {
+      query += ` AND status = 'trial' AND trial_ends_at BETWEEN now() AND now() + interval '3 days'`;
+    } else if (status === 'expired') {
+      query += ` AND (status = 'expired' OR (status = 'trial' AND trial_ends_at <= now()))`;
+    } else if (status === 'suspended') {
+      query += ` AND status = 'suspended'`;
+    }
+
+    query += ` ORDER BY id DESC LIMIT 200`;
+
+    const { rows } = await pool.query(query, params);
+    res.json(rows);
+  } catch (e) { next(e); }
+});
+
+// 3. Onboard New Pharmacy Client / Store Provisioning
+app.post('/api/founder/tenants', requireAuth, requireOwner, async (req, res, next) => {
+  try {
+    await ensureTenantsTable();
+    const {
+      store_name,
+      owner_name,
+      phone,
+      email,
+      city,
+      state,
+      address,
+      license_number,
+      plan,
+      trial_days,
+    } = req.body || {};
+
+    if (!store_name?.trim() || !owner_name?.trim() || !phone?.trim()) {
+      return bad(res, 400, 'Store name, owner name, and phone number are required');
+    }
+
+    const trialDuration = parseInt(trial_days, 10) || 30;
+    const assignedPlan = ['monthly', 'yearly', 'lifetime'].includes(plan) ? plan : 'trial';
+    const status = assignedPlan === 'trial' ? 'trial' : 'active';
+    const price = assignedPlan === 'yearly' ? 833.00 : 999.00;
+
+    const { rows } = await pool.query(
+      `INSERT INTO tenants (
+        store_name, owner_name, phone, email, city, state, address, license_number,
+        plan, status, price_per_month, trial_ends_at, subscription_ends_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now() + make_interval(days => $12::int), CASE WHEN $9 = 'trial' THEN NULL ELSE now() + interval '30 days' END)
+      RETURNING *`,
+      [
+        String(store_name).trim(),
+        String(owner_name).trim(),
+        String(phone).trim(),
+        String(email || '').trim(),
+        String(city || '').trim(),
+        String(state || '').trim(),
+        String(address || '').trim(),
+        String(license_number || '').trim(),
+        assignedPlan,
+        status,
+        price,
+        trialDuration,
+      ]
+    );
+
+    const newTenant = rows[0];
+
+    // Build ready-to-send WhatsApp onboarding text for the client
+    const cleanPhone = String(phone).replace(/[^\d]/g, '');
+    const loginUrl = 'https://client-tau-eight-75.vercel.app';
+    const waText = encodeURIComponent(
+      `🏥 *Namaste ${owner_name}! Welcome to MediStock Pharmacy Software.*\n\n` +
+      `Aapka medical store *${store_name}* setup ho gaya hai!\n\n` +
+      `🔗 *Login URL:* ${loginUrl}\n` +
+      `👤 *Username:* ${cleanPhone.slice(-10)}\n` +
+      `🔑 *Initial Password:* medistock123\n` +
+      `📅 *Free Trial Validity:* ${trialDuration} Days (Until ${new Date(Date.now() + trialDuration * 86400000).toLocaleDateString('en-IN')})\n\n` +
+      `Agar koi madad chahiye toh isi number par WhatsApp karein. Thank you!`
+    );
+
+    const waLink = `https://wa.me/91${cleanPhone.slice(-10)}?text=${waText}`;
+
+    res.json({
+      tenant: newTenant,
+      whatsappLink: waLink,
+      initialPassword: 'medistock123',
+    });
+  } catch (e) { next(e); }
+});
+
+// 4. Remote Kill-Switch (Activate / Suspend / Lock Access)
+app.put('/api/founder/tenants/:id/status', requireAuth, requireOwner, async (req, res, next) => {
+  try {
+    const id = asId(req.params.id);
+    const { status } = req.body || {};
+    const valid = ['active', 'trial', 'expired', 'suspended'];
+    if (!valid.includes(status)) return bad(res, 400, 'Invalid status code');
+
+    const { rows } = await pool.query(
+      'UPDATE tenants SET status = $1 WHERE id = $2 RETURNING *',
+      [status, id]
+    );
+    if (!rows[0]) return bad(res, 404, 'Pharmacy tenant not found');
+    res.json(rows[0]);
+  } catch (e) { next(e); }
+});
+
+// 5. Extend Trial Duration (+15 / +30 Days)
+app.put('/api/founder/tenants/:id/extend-trial', requireAuth, requireOwner, async (req, res, next) => {
+  try {
+    const id = asId(req.params.id);
+    const days = parseInt(req.body?.days, 10) || 15;
+
+    const { rows } = await pool.query(
+      `UPDATE tenants
+       SET trial_ends_at = GREATEST(trial_ends_at, now()) + make_interval(days => $1::int),
+           status = 'trial'
+       WHERE id = $2 RETURNING *`,
+      [days, id]
+    );
+    if (!rows[0]) return bad(res, 404, 'Pharmacy tenant not found');
+    res.json(rows[0]);
+  } catch (e) { next(e); }
+});
+
+// 6. Change Subscription Plan (Trial -> Paid Monthly / Yearly)
+app.put('/api/founder/tenants/:id/plan', requireAuth, requireOwner, async (req, res, next) => {
+  try {
+    const id = asId(req.params.id);
+    const { plan, duration_months } = req.body || {};
+    const valid = ['trial', 'monthly', 'yearly', 'lifetime'];
+    if (!valid.includes(plan)) return bad(res, 400, 'Invalid plan type');
+
+    const months = parseInt(duration_months, 10) || (plan === 'yearly' ? 12 : 1);
+    const price = plan === 'yearly' ? 833.00 : 999.00;
+
+    const { rows } = await pool.query(
+      `UPDATE tenants
+       SET plan = $1,
+           status = 'active',
+           price_per_month = $2,
+           subscription_ends_at = now() + make_interval(months => $3::int)
+       WHERE id = $4 RETURNING *`,
+      [plan, price, months, id]
+    );
+    if (!rows[0]) return bad(res, 404, 'Pharmacy tenant not found');
+    res.json(rows[0]);
+  } catch (e) { next(e); }
+});
+
+// 7. Impersonate Tenant / Remote Access Token
+app.post('/api/founder/tenants/:id/impersonate', requireAuth, requireOwner, async (req, res, next) => {
+  try {
+    const id = asId(req.params.id);
+    const tenant = (await pool.query('SELECT * FROM tenants WHERE id = $1', [id])).rows[0];
+    if (!tenant) return bad(res, 404, 'Tenant not found');
+
+    // Create session token for remote inspection
+    const token = await createSession(req.user.id);
+    res.json({
+      token,
+      tenant,
+      redirectUrl: `https://client-tau-eight-75.vercel.app?tenant_id=${tenant.id}`,
+    });
+  } catch (e) { next(e); }
+});
+
+// ---------------------------------------------------------------------------
 // Error handling
 // ---------------------------------------------------------------------------
 app.use((err, req, res, next) => {
@@ -1570,3 +1850,4 @@ app.use((err, req, res, next) => {
 });
 
 module.exports = app;
+
