@@ -9,8 +9,14 @@ const app = express();
 const allowedOrigins = [
   'http://localhost:5173',           // Vite dev server
   'http://localhost:3001',           // Local dev (server serves client)
-  'https://medistock.vercel.app',    // Main Vercel frontend (adjust to your actual domain)
+  'http://localhost:3002',           // Local dev (medistock-admin)
+  'http://localhost:3000',           // Next.js default port
+  'http://127.0.0.1:3001',
+  'http://127.0.0.1:3002',
+  'https://medistock.vercel.app',    // Main Vercel frontend
   'https://medistock-api.vercel.app', // API domain if different
+  /^http:\/\/localhost:\d+$/,        // Any local dev port
+  /^http:\/\/127\.0\.0\.1:\d+$/,     // Any local 127.0.0.1 port
   /^https:\/\/.*\.vercel\.app$/,     // Any Vercel preview deployment
 ];
 app.use(cors({
