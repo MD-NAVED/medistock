@@ -81,10 +81,10 @@ export default function Login() {
 
           <Box sx={{ mt: 3, textAlign: 'center' }}>
             <Typography variant="body2" color="text.secondary">
-              First time here?{' '}
+              New pharmacy? Register your own store —{' '}
             </Typography>
             <Button component="a" href="/signup" variant="text" size="small">
-              Create Admin Account
+              Register New Store (Free Trial)
             </Button>
           </Box>
         </CardContent>

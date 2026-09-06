@@ -86,12 +86,12 @@ async function verifyPassword(user, password) {
   return ok;
 }
 
-async function addUser(username, password, name, role) {
+async function addUser(username, password, name, role, storeId = null) {
   const salt = crypto.randomBytes(16).toString('hex');
   const hash = scryptHash(password, salt);
   const res = await pool.query(
-    'INSERT INTO users (username, password_hash, salt, name, role, algo) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
-    [username, hash, salt, name, role, 'scrypt']
+    'INSERT INTO users (username, password_hash, salt, name, role, algo, store_id) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id',
+    [username, hash, salt, name, role, 'scrypt', storeId]
   );
   return res.rows[0].id;
 }

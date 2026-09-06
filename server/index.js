@@ -102,27 +102,125 @@ async function createSession(userId) {
   return token;
 }
 
+// ---------------------------------------------------------------------------
+// Multi-tenant schema — adds store_id scoping to every business table and
+// migrates pre-existing single-tenant data into one default store. Runs once
+// at boot; requireAuth awaits it so no request ever sees a half-migrated DB.
+// ---------------------------------------------------------------------------
+let schemaReadyPromise = null;
+function ensureSchema() {
+  if (!schemaReadyPromise) {
+    schemaReadyPromise = (async () => {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS tenants (
+          id SERIAL PRIMARY KEY,
+          store_name TEXT NOT NULL,
+          owner_name TEXT NOT NULL,
+          phone VARCHAR(30) NOT NULL,
+          email VARCHAR(255) DEFAULT '',
+          city VARCHAR(100) DEFAULT '',
+          state VARCHAR(100) DEFAULT '',
+          address TEXT DEFAULT '',
+          license_number VARCHAR(100) DEFAULT '',
+          plan VARCHAR(50) NOT NULL DEFAULT 'trial',
+          status VARCHAR(50) NOT NULL DEFAULT 'trial',
+          price_per_month NUMERIC(10, 2) NOT NULL DEFAULT 999.00,
+          trial_ends_at TIMESTAMPTZ NOT NULL DEFAULT (CURRENT_TIMESTAMP + interval '30 days'),
+          subscription_ends_at TIMESTAMPTZ,
+          total_bills INTEGER NOT NULL DEFAULT 0,
+          total_medicines INTEGER NOT NULL DEFAULT 0,
+          last_active_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      const { rows: tc } = await pool.query('SELECT COUNT(*)::int AS count FROM tenants');
+      if (tc[0].count === 0) {
+        await pool.query(`
+          INSERT INTO tenants (store_name, owner_name, phone, city, state, license_number, plan, status, price_per_month, trial_ends_at, subscription_ends_at, total_bills, total_medicines, last_active_at, created_at)
+          VALUES
+            ('Apollo Medicos', 'Suresh Sharma', '+91 98234 11223', 'Mumbai', 'Maharashtra', 'DL-MH-2024-991', 'monthly', 'active', 999.00, now() - interval '60 days', now() + interval '24 days', 1420, 850, now() - interval '10 minutes', now() - interval '90 days'),
+            ('Gupta Chemist & Druggist', 'Rajesh Gupta', '+91 98111 22334', 'Delhi', 'Delhi', 'DL-DL-2024-442', 'monthly', 'active', 999.00, now() - interval '45 days', now() + interval '12 days', 980, 620, now() - interval '25 minutes', now() - interval '75 days'),
+            ('City Pharmacy & Surgical', 'Mohammed Naved', '+91 99887 76655', 'Lucknow', 'Uttar Pradesh', 'DL-UP-2024-118', 'yearly', 'active', 833.00, now() - interval '120 days', now() + interval '210 days', 3420, 1420, now() - interval '5 minutes', now() - interval '150 days'),
+            ('Al-Shifa Medical Store', 'Dr. Farhan Ali', '+91 97654 32109', 'Hyderabad', 'Telangana', 'DL-TS-2024-773', 'monthly', 'active', 999.00, now() - interval '30 days', now() + interval '2 days', 640, 480, now() - interval '1 hour', now() - interval '60 days'),
+            ('Metro Care Pharmacy', 'Anil Verma', '+91 98333 44556', 'Bangalore', 'Karnataka', 'DL-KA-2024-301', 'trial', 'trial', 999.00, now() + interval '3 days', null, 145, 230, now() - interval '2 hours', now() - interval '27 days'),
+            ('Sharma Medical Hall', 'Vikram Sharma', '+91 98777 66554', 'Jaipur', 'Rajasthan', 'DL-RJ-2024-812', 'trial', 'trial', 999.00, now() + interval '18 days', null, 82, 190, now() - interval '4 hours', now() - interval '12 days'),
+            ('Modern Chemist', 'Amit Patel', '+91 98980 12345', 'Ahmedabad', 'Gujarat', 'DL-GJ-2024-521', 'monthly', 'active', 999.00, now() - interval '90 days', now() + interval '18 days', 1890, 950, now() - interval '30 minutes', now() - interval '120 days'),
+            ('Kolkata Life Care', 'Subhash Bose', '+91 98310 98765', 'Kolkata', 'West Bengal', 'DL-WB-2024-609', 'trial', 'trial', 999.00, now() + interval '1 day', null, 110, 310, now() - interval '3 hours', now() - interval '29 days'),
+            ('Janata Aushadhi Kendra', 'Pankaj Tiwari', '+91 94500 11223', 'Varanasi', 'Uttar Pradesh', 'DL-UP-2024-904', 'trial', 'expired', 999.00, now() - interval '4 days', null, 95, 140, now() - interval '5 days', now() - interval '34 days'),
+            ('National Pharmacy', 'Sunil Deshmukh', '+91 98220 55443', 'Pune', 'Maharashtra', 'DL-MH-2024-114', 'monthly', 'suspended', 999.00, now() - interval '60 days', now() - interval '8 days', 430, 290, now() - interval '8 days', now() - interval '80 days')
+        `);
+      }
+
+      // Per-store scoping columns on every business table.
+      for (const t of ['users', 'medicines', 'batches', 'purchases', 'sales', 'customers', 'stock_writeoffs', 'settings']) {
+        await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS store_id INTEGER`);
+      }
+      // Platform admin flag: the SaaS operator (you), not a store owner.
+      await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS platform_admin INTEGER NOT NULL DEFAULT 0');
+      // settings.id used to be pinned to 1; per-store rows need that check gone.
+      try { await pool.query('ALTER TABLE settings DROP CONSTRAINT settings_id_check'); } catch { /* already dropped */ }
+
+      // One-time migration: pull every orphan (pre-multi-tenant) row into the
+      // default store created from the original single-tenant settings row.
+      const orphans = (await pool.query('SELECT COUNT(*)::int AS c FROM users WHERE store_id IS NULL')).rows[0].c;
+      if (orphans > 0) {
+        const s = (await pool.query('SELECT * FROM settings WHERE store_id IS NULL ORDER BY id LIMIT 1')).rows[0]
+          || (await pool.query('SELECT * FROM settings ORDER BY id LIMIT 1')).rows[0];
+        const storeName = (s && s.store_name) || 'My Medical Store';
+        let tid = (await pool.query('SELECT id FROM tenants WHERE store_name = $1 ORDER BY id LIMIT 1', [storeName])).rows[0]?.id;
+        if (!tid) {
+          tid = (await pool.query(
+            `INSERT INTO tenants (store_name, owner_name, phone, plan, status, price_per_month, trial_ends_at, subscription_ends_at)
+             VALUES ($1, 'Owner', '', 'lifetime', 'active', 0, now() - interval '1 day', now() + interval '10 years')
+             RETURNING id`,
+            [storeName]
+          )).rows[0].id;
+        }
+        for (const t of ['users', 'medicines', 'batches', 'purchases', 'sales', 'customers', 'stock_writeoffs', 'settings']) {
+          await pool.query(`UPDATE ${t} SET store_id = $1 WHERE store_id IS NULL`, [tid]);
+        }
+        // The original owners operate the SaaS platform itself.
+        await pool.query("UPDATE users SET platform_admin = 1 WHERE role = 'owner' AND store_id = $1", [tid]);
+      }
+    })().catch((e) => { schemaReadyPromise = null; throw e; });
+  }
+  return schemaReadyPromise;
+}
+// Kick off at load, but never crash the process if the DB is briefly down —
+// requireAuth re-awaits the (reset) promise on every request until it succeeds.
+ensureSchema().catch((e) => console.error('schema init deferred:', e.message));
+
 function requireAuth(req, res, next) {
-  const h = req.headers.authorization || '';
-  const token = h.startsWith('Bearer ') ? h.slice(7) : null;
-  if (!token) return res.status(401).json({ error: 'Not logged in', code: 'session_invalid' });
-  pool.query(
-    'SELECT s.token, u.id, u.username, u.name, u.role, u.active FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = $1 AND s.expires_at > now()',
-    [token]
-  ).then(({ rows }) => {
-    const row = rows[0];
-    if (!row || !row.active) {
-      return res.status(401).json({ error: 'Session expired — please log in again', code: 'session_invalid' });
-    }
-    pool.query('UPDATE sessions SET last_seen = now() WHERE token = $1', [token]).catch(() => {});
-    req.user = { id: row.id, username: row.username, name: row.name, role: row.role };
-    req.token = token;
-    next();
+  ensureSchema().then(() => {
+    const h = req.headers.authorization || '';
+    const token = h.startsWith('Bearer ') ? h.slice(7) : null;
+    if (!token) return res.status(401).json({ error: 'Not logged in', code: 'session_invalid' });
+    return pool.query(
+      'SELECT s.token, u.id, u.username, u.name, u.role, u.active, u.store_id, u.platform_admin FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = $1 AND s.expires_at > now()',
+      [token]
+    ).then(({ rows }) => {
+      const row = rows[0];
+      if (!row || !row.active) {
+        return res.status(401).json({ error: 'Session expired — please log in again', code: 'session_invalid' });
+      }
+      pool.query('UPDATE sessions SET last_seen = now() WHERE token = $1', [token]).catch(() => {});
+      req.user = { id: row.id, username: row.username, name: row.name, role: row.role,
+                   storeId: row.store_id, platformAdmin: row.platform_admin === 1 };
+      req.storeId = row.store_id;
+      req.token = token;
+      next();
+    });
   }).catch(next);
 }
 
 function requireOwner(req, res, next) {
   if (req.user.role !== 'owner') return res.status(403).json({ error: 'Owner access only' });
+  next();
+}
+
+// The SaaS operator's guard — founder panel / billing management only.
+function requirePlatformAdmin(req, res, next) {
+  if (!req.user || !req.user.platformAdmin) return res.status(403).json({ error: 'Platform admin only' });
   next();
 }
 
@@ -140,34 +238,46 @@ function recentFailures(username) {
 // Auth
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
-// First-time Admin Signup (only allowed when NO owner exists)
+// First-time Store Registration — anyone can register a NEW pharmacy and get
+// their own isolated store space with a 30-day free trial. Every store's data
+// (medicines, bills, khata) is private to that store.
 // ---------------------------------------------------------------------------
 app.post('/api/auth/signup', async (req, res, next) => {
   try {
-    // Check if any owner already exists
-    const owner = (await pool.query("SELECT id FROM users WHERE role = 'owner' AND active = 1 LIMIT 1")).rows[0];
-    if (owner) {
-      return bad(res, 403, 'Admin already exists. Please sign in or contact the admin.');
-    }
-
-    const { username, password, name } = req.body || {};
-    if (!username?.trim() || !password || !name?.trim()) {
-      return bad(res, 400, 'Name, username and password are required');
+    await ensureSchema();
+    const { store_name, name, username, password, phone } = req.body || {};
+    if (!store_name?.trim() || !username?.trim() || !password || !name?.trim()) {
+      return bad(res, 400, 'Store name, owner name, username and password are required');
     }
     if (String(password).length < 6) {
       return bad(res, 400, 'Password must be at least 6 characters');
     }
 
     const uname = String(username).trim();
-    const { rows } = await pool.query('SELECT id FROM users WHERE username = $1', [uname]);
-    if (rows[0]) {
+    const dupe = (await pool.query('SELECT id FROM users WHERE username = $1', [uname])).rows[0];
+    if (dupe) {
       return bad(res, 409, 'That username is already taken');
     }
 
-    // Create the first owner
-    const userId = await addUser(uname, String(password), String(name).trim(), 'owner');
+    // 1. Create the store (tenant) with a 30-day trial.
+    const tid = (await pool.query(
+      `INSERT INTO tenants (store_name, owner_name, phone, plan, status, trial_ends_at)
+       VALUES ($1, $2, $3, 'trial', 'trial', now() + interval '30 days')
+       RETURNING id`,
+      [String(store_name).trim().slice(0, 200), String(name).trim().slice(0, 200), String(phone || '').trim().slice(0, 30)]
+    )).rows[0].id;
+
+    // 2. Give the store its own settings row (bill header uses it).
+    await pool.query(
+      `INSERT INTO settings (id, store_id, store_name, store_address, phone, license_number, gst_enabled, gst_number, currency)
+       VALUES ($1, $1, $2, '', $3, '', 0, '', '₹')`,
+      [tid, String(store_name).trim(), String(phone || '').trim()]
+    );
+
+    // 3. Create the store owner account and log them in.
+    const userId = await addUser(uname, String(password), String(name).trim(), 'owner', tid);
     const token = await createSession(userId);
-    res.json({ token, user: { id: userId, username: uname, name: String(name).trim(), role: 'owner' } });
+    res.json({ token, user: { id: userId, username: uname, name: String(name).trim(), role: 'owner', store_id: tid } });
   } catch (e) { next(e); }
 });
 
@@ -197,7 +307,7 @@ app.post('/api/auth/login', async (req, res, next) => {
       [uname.slice(0, 255), ip.slice(0, 100), 1]);
     await pool.query("DELETE FROM login_attempts WHERE created_at < now() - interval '2 days'");
     const token = await createSession(u.id);
-    res.json({ token, user: { id: u.id, username: u.username, name: u.name, role: u.role } });
+    res.json({ token, user: { id: u.id, username: u.username, name: u.name, role: u.role, platform_admin: u.platform_admin === 1, store_id: u.store_id } });
   } catch (e) { next(e); }
 });
 
@@ -237,8 +347,8 @@ app.get('/api/medicines', requireAuth, async (req, res, next) => {
     const q = String(req.query.q || '').trim();
     const like = '%' + q + '%';
     const { rows } = await pool.query(
-      'SELECT m.id, m.name, m.company, m.type, m.shelf, m.buy_price::float8 AS buy_price, m.sell_price::float8 AS sell_price, m.gst_rate::float8 AS gst_rate, m.low_stock_threshold, m.logo_url, COALESCE(SUM(b.quantity), 0)::int AS stock, MIN(CASE WHEN b.quantity > 0 THEN b.expiry_date END) AS nearest_expiry FROM medicines m LEFT JOIN batches b ON b.medicine_id = m.id WHERE m.active = 1 AND (m.name ILIKE $1 OR m.company ILIKE $1) GROUP BY m.id ORDER BY m.name LIMIT 500',
-      [like]
+      'SELECT m.id, m.name, m.company, m.type, m.shelf, m.buy_price::float8 AS buy_price, m.sell_price::float8 AS sell_price, m.gst_rate::float8 AS gst_rate, m.low_stock_threshold, m.logo_url, COALESCE(SUM(b.quantity), 0)::int AS stock, MIN(CASE WHEN b.quantity > 0 THEN b.expiry_date END) AS nearest_expiry FROM medicines m LEFT JOIN batches b ON b.medicine_id = m.id WHERE m.store_id = $2 AND m.active = 1 AND (m.name ILIKE $1 OR m.company ILIKE $1) GROUP BY m.id ORDER BY m.name LIMIT 500',
+      [like, req.storeId]
     );
     res.json(rows);
   } catch (e) { next(e); }
@@ -247,8 +357,8 @@ app.get('/api/medicines', requireAuth, async (req, res, next) => {
 app.get('/api/medicines/:id/batches', requireAuth, async (req, res, next) => {
   try {
     const { rows } = await pool.query(
-      'SELECT id, batch_number, expiry_date, quantity, (expiry_date - CURRENT_DATE) AS days_left FROM batches WHERE medicine_id = $1 AND quantity > 0 ORDER BY expiry_date ASC',
-      [asId(req.params.id)]
+      'SELECT b.id, b.batch_number, b.expiry_date, b.quantity, (b.expiry_date - CURRENT_DATE) AS days_left FROM batches b JOIN medicines m ON m.id = b.medicine_id WHERE b.medicine_id = $1 AND m.store_id = $2 AND b.quantity > 0 ORDER BY b.expiry_date ASC',
+      [asId(req.params.id), req.storeId]
     );
     res.json(rows);
   } catch (e) { next(e); }
@@ -258,7 +368,7 @@ app.get('/api/medicines/:id/batches', requireAuth, async (req, res, next) => {
 app.get('/api/medicines/:id/detail', requireAuth, async (req, res, next) => {
   try {
     const medId = asId(req.params.id);
-    const med = (await pool.query('SELECT * FROM medicines WHERE id = $1', [medId])).rows[0];
+    const med = (await pool.query('SELECT * FROM medicines WHERE id = $1 AND store_id = $2', [medId, req.storeId])).rows[0];
     if (!med) return bad(res, 404, 'Medicine not found');
     const batches = (await pool.query(
       'SELECT id, batch_number, expiry_date, quantity, (expiry_date - CURRENT_DATE) AS days_left FROM batches WHERE medicine_id = $1 ORDER BY expiry_date ASC',
@@ -278,8 +388,8 @@ app.post('/api/batches/:id/writeoff', requireAuth, async (req, res, next) => {
   try {
     const { quantity, reason, note } = req.body || {};
     const batch = (await pool.query(
-      'SELECT b.*, m.name, m.company, m.buy_price::float8 AS buy_price FROM batches b JOIN medicines m ON m.id = b.medicine_id WHERE b.id = $1',
-      [asId(req.params.id)]
+      'SELECT b.*, m.name, m.company, m.buy_price::float8 AS buy_price FROM batches b JOIN medicines m ON m.id = b.medicine_id WHERE b.id = $1 AND m.store_id = $2',
+      [asId(req.params.id), req.storeId]
     )).rows[0];
     if (!batch) return bad(res, 404, 'Batch not found');
 
@@ -292,9 +402,9 @@ app.post('/api/batches/:id/writeoff', requireAuth, async (req, res, next) => {
     await transaction(async (client) => {
       await client.query('UPDATE batches SET quantity = quantity - $1 WHERE id = $2', [qty, batch.id]);
       await client.query(
-        'INSERT INTO stock_writeoffs (batch_id, medicine_id, medicine_name, company, batch_number, expiry_date, quantity, cost_value, reason, note, user_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)',
+        'INSERT INTO stock_writeoffs (batch_id, medicine_id, medicine_name, company, batch_number, expiry_date, quantity, cost_value, reason, note, user_id, store_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)',
         [batch.id, batch.medicine_id, batch.name, batch.company, batch.batch_number,
-         batch.expiry_date, qty, qty * batch.buy_price, why, String(note || '').trim(), req.user.id]
+         batch.expiry_date, qty, qty * batch.buy_price, why, String(note || '').trim(), req.user.id, req.storeId]
       );
     });
     res.json({ ok: true, removed: qty, cost_value: qty * batch.buy_price });
@@ -304,7 +414,8 @@ app.post('/api/batches/:id/writeoff', requireAuth, async (req, res, next) => {
 app.get('/api/writeoffs', requireAuth, async (req, res, next) => {
   try {
     const { rows } = await pool.query(
-      'SELECT w.*, w.cost_value::float8 AS cost_value, u.name AS user_name FROM stock_writeoffs w JOIN users u ON u.id = w.user_id ORDER BY w.id DESC LIMIT 200'
+      'SELECT w.*, w.cost_value::float8 AS cost_value, u.name AS user_name FROM stock_writeoffs w JOIN users u ON u.id = w.user_id WHERE w.store_id = $1 ORDER BY w.id DESC LIMIT 200',
+      [req.storeId]
     );
     const total = rows.reduce((s, r) => s + Number(r.cost_value), 0);
     res.json({ rows, total_loss: total });
@@ -315,7 +426,7 @@ app.get('/api/writeoffs', requireAuth, async (req, res, next) => {
 app.delete('/api/medicines/:id', requireAuth, requireOwner, async (req, res, next) => {
   try {
     const medId = asId(req.params.id);
-    const med = (await pool.query('SELECT * FROM medicines WHERE id = $1 AND active = 1', [medId])).rows[0];
+    const med = (await pool.query('SELECT * FROM medicines WHERE id = $1 AND active = 1 AND store_id = $2', [medId, req.storeId])).rows[0];
     if (!med) return bad(res, 404, 'Medicine not found');
     const stock = (await pool.query('SELECT COALESCE(SUM(quantity),0)::int AS q FROM batches WHERE medicine_id = $1', [med.id])).rows[0].q;
     if (stock > 0 && !req.query.force) {
@@ -338,7 +449,7 @@ app.post('/api/medicines', requireAuth, requireOwner, async (req, res, next) => 
 
     // A removed medicine keeps its row (sales history references it), so adding
     // the same name + company again revives that row instead of failing.
-    const existing = (await pool.query('SELECT * FROM medicines WHERE name = $1 AND company = $2', [nm, co])).rows[0];
+    const existing = (await pool.query('SELECT * FROM medicines WHERE name = $1 AND company = $2 AND store_id = $3', [nm, co, req.storeId])).rows[0];
     if (existing && existing.active === 1) {
       return bad(res, 409, 'This medicine + company already exists in the catalog');
     }
@@ -352,9 +463,9 @@ app.post('/api/medicines', requireAuth, requireOwner, async (req, res, next) => 
     }
 
     const r = await pool.query(
-      'INSERT INTO medicines (name, company, type, shelf, buy_price, sell_price, gst_rate, low_stock_threshold, logo_url) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id',
+      'INSERT INTO medicines (name, company, type, shelf, buy_price, sell_price, gst_rate, low_stock_threshold, logo_url, store_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id',
       [nm, co, String(type || 'Tablet'), String(shelf || '').trim(),
-       Number(buy_price) || 0, Number(sell_price) || 0, Number(gst_rate) || 0, Number(low_stock_threshold) || 10, logo]
+       Number(buy_price) || 0, Number(sell_price) || 0, Number(gst_rate) || 0, Number(low_stock_threshold) || 10, logo, req.storeId]
     );
     res.json({ id: r.rows[0].id });
   } catch (e) { next(e); }
@@ -362,7 +473,7 @@ app.post('/api/medicines', requireAuth, requireOwner, async (req, res, next) => 
 
 app.put('/api/medicines/:id', requireAuth, requireOwner, async (req, res, next) => {
   try {
-    const m = (await pool.query('SELECT * FROM medicines WHERE id = $1', [asId(req.params.id)])).rows[0];
+    const m = (await pool.query('SELECT * FROM medicines WHERE id = $1 AND store_id = $2', [asId(req.params.id), req.storeId])).rows[0];
     if (!m) return bad(res, 404, 'Medicine not found');
     const b = req.body || {};
     const newCompany = String(b.company ?? m.company).trim();
@@ -448,7 +559,8 @@ app.delete('/api/companies/:id', requireAuth, requireOwner, async (req, res, nex
 app.get('/api/purchases', requireAuth, async (req, res, next) => {
   try {
     const { rows } = await pool.query(
-      'SELECT p.id, p.invoice_number, p.supplier_name, p.total::float8 AS total, p.created_at, p.status, p.reversed_at, p.reverse_reason, u.name AS created_by, COUNT(pi.id)::int AS item_count FROM purchases p JOIN users u ON u.id = p.user_id LEFT JOIN purchase_items pi ON pi.purchase_id = p.id GROUP BY p.id, u.name ORDER BY p.id DESC LIMIT 200'
+      'SELECT p.id, p.invoice_number, p.supplier_name, p.total::float8 AS total, p.created_at, p.status, p.reversed_at, p.reverse_reason, u.name AS created_by, COUNT(pi.id)::int AS item_count FROM purchases p JOIN users u ON u.id = p.user_id LEFT JOIN purchase_items pi ON pi.purchase_id = p.id WHERE p.store_id = $1 GROUP BY p.id, u.name ORDER BY p.id DESC LIMIT 200',
+      [req.storeId]
     );
     res.json(rows);
   } catch (e) { next(e); }
@@ -457,8 +569,8 @@ app.get('/api/purchases', requireAuth, async (req, res, next) => {
 app.get('/api/purchases/:id', requireAuth, async (req, res, next) => {
   try {
     const p = (await pool.query(
-      'SELECT p.*, p.total::float8 AS total, u.name AS created_by FROM purchases p JOIN users u ON u.id = p.user_id WHERE p.id = $1',
-      [asId(req.params.id)]
+      'SELECT p.*, p.total::float8 AS total, u.name AS created_by FROM purchases p JOIN users u ON u.id = p.user_id WHERE p.id = $1 AND p.store_id = $2',
+      [asId(req.params.id), req.storeId]
     )).rows[0];
     if (!p) return bad(res, 404, 'Purchase not found');
     const items = (await pool.query(
@@ -476,7 +588,7 @@ app.get('/api/purchases/:id', requireAuth, async (req, res, next) => {
  */
 app.post('/api/purchases/:id/reverse', requireAuth, requireOwner, async (req, res, next) => {
   try {
-    const p = (await pool.query('SELECT * FROM purchases WHERE id = $1', [asId(req.params.id)])).rows[0];
+    const p = (await pool.query('SELECT * FROM purchases WHERE id = $1 AND store_id = $2', [asId(req.params.id), req.storeId])).rows[0];
     if (!p) return bad(res, 404, 'Purchase not found');
     if (p.status === 'reversed') return bad(res, 409, 'This purchase is already reversed');
 
@@ -526,8 +638,8 @@ app.post('/api/purchases', requireAuth, async (req, res, next) => {
     let total = 0;
     const purchaseId = await transaction(async (client) => {
       const pr = await client.query(
-        'INSERT INTO purchases (invoice_number, supplier_name, user_id, total) VALUES ($1, $2, $3, 0) RETURNING id',
-        [String(invoice_number || '').trim() || 'PINV-' + Date.now(), String(supplier_name || '').trim(), req.user.id]
+        'INSERT INTO purchases (invoice_number, supplier_name, user_id, total, store_id) VALUES ($1, $2, $3, 0, $4) RETURNING id',
+        [String(invoice_number || '').trim() || 'PINV-' + Date.now(), String(supplier_name || '').trim(), req.user.id, req.storeId]
       );
       const pid = pr.rows[0].id;
       for (const it of items) {
@@ -571,7 +683,7 @@ app.post('/api/purchases', requireAuth, async (req, res, next) => {
  */
 app.put('/api/purchases/:id', requireAuth, requireOwner, async (req, res, next) => {
   try {
-    const p = (await pool.query('SELECT * FROM purchases WHERE id = $1', [asId(req.params.id)])).rows[0];
+    const p = (await pool.query('SELECT * FROM purchases WHERE id = $1 AND store_id = $2', [asId(req.params.id), req.storeId])).rows[0];
     if (!p) return bad(res, 404, 'Purchase not found');
     if (p.status === 'reversed') return bad(res, 409, 'Cannot edit a reversed purchase');
 
@@ -683,15 +795,15 @@ app.post('/api/sales', requireAuth, async (req, res, next) => {
       const maxId = (await client.query('SELECT COALESCE(MAX(id), 0) AS m FROM sales')).rows[0].m + 1;
       const invNo = 'INV-' + new Date().toISOString().slice(0, 10).replaceAll('-', '') + '-' + String(maxId).padStart(4, '0') + '-' + crypto.randomInt(1000, 10000);
       const sr = await client.query(
-        'INSERT INTO sales (invoice_number, user_id, customer_name, customer_phone, subtotal, gst_amount, total) VALUES ($1, $2, $3, $4, 0, 0, 0) RETURNING id',
-        [invNo, req.user.id, custName, custPhone]
+        'INSERT INTO sales (invoice_number, user_id, customer_name, customer_phone, subtotal, gst_amount, total, store_id) VALUES ($1, $2, $3, $4, 0, 0, 0, $5) RETURNING id',
+        [invNo, req.user.id, custName, custPhone, req.storeId]
       );
       const saleId = sr.rows[0].id;
 
       let subtotal = 0, gstAmount = 0;
       const outItems = [];
       for (const it of items) {
-        const m = (await client.query('SELECT * FROM medicines WHERE id = $1 AND active = 1', [asId(it.medicine_id)])).rows[0];
+        const m = (await client.query('SELECT * FROM medicines WHERE id = $1 AND active = 1 AND store_id = $2', [asId(it.medicine_id), req.storeId])).rows[0];
         if (!m) { const err = new Error('Medicine #' + asId(it.medicine_id) + ' not found'); err.status = 404; err.expose = true; throw err; }
 
         // FEFO: allocate from batches that expire soonest first
@@ -751,8 +863,8 @@ app.get('/api/sales', requireAuth, async (req, res, next) => {
     const from = DATE_RE.test(qFrom) ? qFrom : '1970-01-01';
     const to = DATE_RE.test(qTo) ? qTo : '2999-12-31';
     const { rows } = await pool.query(
-      'SELECT s.id, s.invoice_number, s.customer_name, s.subtotal, s.gst_amount, s.total, s.created_at, s.status, s.cancelled_at, s.cancel_reason, u.name AS served_by, COUNT(si.id)::int AS item_count, COALESCE(SUM(si.quantity), 0)::int AS units, COALESCE(SUM(si.returned_qty), 0)::int AS returned_units FROM sales s JOIN users u ON u.id = s.user_id LEFT JOIN sale_items si ON si.sale_id = s.id WHERE s.created_at::date BETWEEN $1 AND $2 GROUP BY s.id, u.name ORDER BY s.id DESC LIMIT 300',
-      [from, to]
+      'SELECT s.id, s.invoice_number, s.customer_name, s.subtotal, s.gst_amount, s.total, s.created_at, s.status, s.cancelled_at, s.cancel_reason, u.name AS served_by, COUNT(si.id)::int AS item_count, COALESCE(SUM(si.quantity), 0)::int AS units, COALESCE(SUM(si.returned_qty), 0)::int AS returned_units FROM sales s JOIN users u ON u.id = s.user_id LEFT JOIN sale_items si ON si.sale_id = s.id WHERE s.store_id = $3 AND s.created_at::date BETWEEN $1 AND $2 GROUP BY s.id, u.name ORDER BY s.id DESC LIMIT 300',
+      [from, to, req.storeId]
     );
     // NUMERIC comes back as strings — hand the client plain numbers.
     for (const r of rows) {
@@ -768,8 +880,8 @@ app.get('/api/sales', requireAuth, async (req, res, next) => {
 app.get('/api/sales/:id', requireAuth, async (req, res, next) => {
   try {
     const sale = (await pool.query(
-      'SELECT s.*, s.subtotal::float8 AS subtotal, s.gst_amount::float8 AS gst_amount, s.total::float8 AS total, u.name AS served_by FROM sales s JOIN users u ON u.id = s.user_id WHERE s.id = $1',
-      [asId(req.params.id)]
+      'SELECT s.*, s.subtotal::float8 AS subtotal, s.gst_amount::float8 AS gst_amount, s.total::float8 AS total, u.name AS served_by FROM sales s JOIN users u ON u.id = s.user_id WHERE s.id = $1 AND s.store_id = $2',
+      [asId(req.params.id), req.storeId]
     )).rows[0];
     if (!sale) return bad(res, 404, 'Bill not found');
 
@@ -801,7 +913,7 @@ app.get('/api/sales/:id', requireAuth, async (req, res, next) => {
  */
 app.post('/api/sales/:id/cancel', requireAuth, async (req, res, next) => {
   try {
-    const sale = (await pool.query('SELECT * FROM sales WHERE id = $1', [asId(req.params.id)])).rows[0];
+    const sale = (await pool.query('SELECT * FROM sales WHERE id = $1 AND store_id = $2', [asId(req.params.id), req.storeId])).rows[0];
     if (!sale) return bad(res, 404, 'Bill not found');
     if (sale.status === 'cancelled') return bad(res, 409, 'This bill is already cancelled');
 
@@ -851,7 +963,7 @@ app.post('/api/sales/:id/cancel', requireAuth, async (req, res, next) => {
  */
 app.post('/api/sales/:id/return', requireAuth, async (req, res, next) => {
   try {
-    const sale = (await pool.query('SELECT * FROM sales WHERE id = $1', [asId(req.params.id)])).rows[0];
+    const sale = (await pool.query('SELECT * FROM sales WHERE id = $1 AND store_id = $2', [asId(req.params.id), req.storeId])).rows[0];
     if (!sale) return bad(res, 404, 'Bill not found');
     if (sale.status === 'cancelled') return bad(res, 409, 'This bill is cancelled — nothing left to return');
 
@@ -916,11 +1028,13 @@ app.post('/api/sales/:id/return', requireAuth, async (req, res, next) => {
 app.get('/api/alerts', requireAuth, async (req, res, next) => {
   try {
     const low = (await pool.query(
-      'SELECT m.id, m.name, m.company, m.shelf, m.low_stock_threshold, COALESCE(SUM(b.quantity), 0)::int AS stock FROM medicines m LEFT JOIN batches b ON b.medicine_id = m.id WHERE m.active = 1 GROUP BY m.id HAVING COALESCE(SUM(b.quantity), 0) <= m.low_stock_threshold ORDER BY stock ASC'
+      'SELECT m.id, m.name, m.company, m.shelf, m.low_stock_threshold, COALESCE(SUM(b.quantity), 0)::int AS stock FROM medicines m LEFT JOIN batches b ON b.medicine_id = m.id WHERE m.store_id = $1 AND m.active = 1 GROUP BY m.id HAVING COALESCE(SUM(b.quantity), 0) <= m.low_stock_threshold ORDER BY stock ASC',
+      [req.storeId]
     )).rows;
 
     const expiring = (await pool.query(
-      'SELECT b.id, b.batch_number, b.expiry_date, b.quantity, m.name, m.company, m.shelf, (b.expiry_date - CURRENT_DATE) AS days_left FROM batches b JOIN medicines m ON m.id = b.medicine_id WHERE b.quantity > 0 AND b.expiry_date <= CURRENT_DATE + 90 ORDER BY b.expiry_date ASC'
+      'SELECT b.id, b.batch_number, b.expiry_date, b.quantity, m.name, m.company, m.shelf, (b.expiry_date - CURRENT_DATE) AS days_left FROM batches b JOIN medicines m ON m.id = b.medicine_id WHERE m.store_id = $1 AND b.quantity > 0 AND b.expiry_date <= CURRENT_DATE + 90 ORDER BY b.expiry_date ASC',
+      [req.storeId]
     )).rows;
 
     res.json({
@@ -941,7 +1055,8 @@ app.get('/api/alerts', requireAuth, async (req, res, next) => {
 app.get('/api/khata', requireAuth, async (req, res, next) => {
   try {
     const { rows } = await pool.query(
-      "SELECT c.id, c.name, c.phone, COALESCE(SUM(CASE l.kind WHEN 'credit' THEN l.amount ELSE -l.amount END), 0)::float8 AS balance, COALESCE(SUM(CASE WHEN l.kind = 'credit' THEN l.amount ELSE 0 END), 0)::float8 AS total_credit, COUNT(l.id)::int AS entries, MAX(l.created_at) AS last_entry FROM customers c LEFT JOIN customer_ledger l ON l.customer_id = c.id GROUP BY c.id ORDER BY balance DESC, c.name"
+      "SELECT c.id, c.name, c.phone, COALESCE(SUM(CASE l.kind WHEN 'credit' THEN l.amount ELSE -l.amount END), 0)::float8 AS balance, COALESCE(SUM(CASE WHEN l.kind = 'credit' THEN l.amount ELSE 0 END), 0)::float8 AS total_credit, COUNT(l.id)::int AS entries, MAX(l.created_at) AS last_entry FROM customers c LEFT JOIN customer_ledger l ON l.customer_id = c.id WHERE c.store_id = $1 GROUP BY c.id ORDER BY balance DESC, c.name",
+      [req.storeId]
     );
     res.json(rows);
   } catch (e) { next(e); }
@@ -953,8 +1068,8 @@ app.post('/api/khata/customers', requireAuth, async (req, res, next) => {
     const phone = String(req.body?.phone || '').trim();
     if (!name) return bad(res, 400, 'Customer name is required');
     const { rows } = await pool.query(
-      'INSERT INTO customers (name, phone) VALUES ($1, $2) RETURNING id, name, phone',
-      [name.slice(0, 200), phone.slice(0, 20)]
+      'INSERT INTO customers (name, phone, store_id) VALUES ($1, $2, $3) RETURNING id, name, phone',
+      [name.slice(0, 200), phone.slice(0, 20), req.storeId]
     );
     res.json(rows[0]);
   } catch (e) { next(e); }
@@ -962,7 +1077,7 @@ app.post('/api/khata/customers', requireAuth, async (req, res, next) => {
 
 app.get('/api/khata/customers/:id', requireAuth, async (req, res, next) => {
   try {
-    const cust = (await pool.query('SELECT id, name, phone, created_at FROM customers WHERE id = $1', [asId(req.params.id)])).rows[0];
+    const cust = (await pool.query('SELECT id, name, phone, created_at FROM customers WHERE id = $1 AND store_id = $2', [asId(req.params.id), req.storeId])).rows[0];
     if (!cust) return bad(res, 404, 'Customer not found');
 
     const entries = (await pool.query(
@@ -997,11 +1112,11 @@ app.post('/api/khata/entries', requireAuth, async (req, res, next) => {
     if (!cid) {
       const nm = String(customer_name || '').trim();
       if (!nm) return bad(res, 400, 'Pick a customer or write a name');
-      const existing = (await pool.query('SELECT id FROM customers WHERE LOWER(name) = LOWER($1)', [nm.slice(0, 200)])).rows[0];
+      const existing = (await pool.query('SELECT id FROM customers WHERE LOWER(name) = LOWER($1) AND store_id = $2', [nm.slice(0, 200), req.storeId])).rows[0];
       cid = existing
         ? existing.id
-        : (await pool.query("INSERT INTO customers (name, phone) VALUES ($1, '') RETURNING id", [nm.slice(0, 200)])).rows[0].id;
-    } else if (!(await pool.query('SELECT id FROM customers WHERE id = $1', [cid])).rows[0]) {
+        : (await pool.query("INSERT INTO customers (name, phone, store_id) VALUES ($1, '', $2) RETURNING id", [nm.slice(0, 200), req.storeId])).rows[0].id;
+    } else if (!(await pool.query('SELECT id FROM customers WHERE id = $1 AND store_id = $2', [cid, req.storeId])).rows[0]) {
       return bad(res, 404, 'Customer not found');
     }
 
@@ -1035,7 +1150,7 @@ app.get('/api/public/invoice/:id', async (req, res, next) => {
     )).rows[0];
     if (!sale || sale.status === 'cancelled') return bad(res, 404, 'Invoice not found');
 
-    const settings = (await pool.query('SELECT store_name, phone, store_address, gst_number FROM settings WHERE id = 1')).rows[0] || {};
+    const settings = (await pool.query('SELECT store_name, phone, store_address, gst_number FROM settings WHERE store_id = $1', [sale.store_id])).rows[0] || {};
     const items = (await pool.query(
       'SELECT medicine_name, company, batch_number, expiry_date, quantity, unit_price::float8 AS unit_price, gst_rate::float8 AS gst_rate, line_total::float8 AS line_total FROM sale_items WHERE sale_id = $1 ORDER BY id',
       [id]
@@ -1069,7 +1184,7 @@ app.get('/api/public/invoice/:id/pdf', async (req, res, next) => {
     )).rows[0];
     if (!sale || sale.status === 'cancelled') return bad(res, 404, 'Invoice not found');
 
-    const settings = (await pool.query('SELECT store_name, phone, store_address, gst_number FROM settings WHERE id = 1')).rows[0] || {};
+    const settings = (await pool.query('SELECT store_name, phone, store_address, gst_number FROM settings WHERE store_id = $1', [sale.store_id])).rows[0] || {};
     const items = (await pool.query(
       'SELECT medicine_name, company, batch_number, quantity, unit_price::float8 AS unit_price, gst_rate::float8 AS gst_rate, line_total::float8 AS line_total FROM sale_items WHERE sale_id = $1 ORDER BY id',
       [id]
@@ -1154,22 +1269,28 @@ app.get('/api/whatsapp/summary', requireAuth, async (req, res, next) => {
   try {
     const [today, purchases, month, low, expiring, khata, settings] = await Promise.all([
       pool.query(
-        "SELECT COUNT(DISTINCT s.id)::int AS bills, COALESCE(SUM((si.quantity - si.returned_qty) * si.unit_price * (1 + COALESCE(si.gst_rate,0)/100.0)), 0)::float8 AS revenue, COALESCE(SUM((si.unit_price - si.cost_price) * (si.quantity - si.returned_qty)), 0)::float8 AS profit FROM sales s LEFT JOIN sale_items si ON si.sale_id = s.id WHERE s.created_at::date = CURRENT_DATE AND s.status != 'cancelled'"
+        "SELECT COUNT(DISTINCT s.id)::int AS bills, COALESCE(SUM((si.quantity - si.returned_qty) * si.unit_price * (1 + COALESCE(si.gst_rate,0)/100.0)), 0)::float8 AS revenue, COALESCE(SUM((si.unit_price - si.cost_price) * (si.quantity - si.returned_qty)), 0)::float8 AS profit FROM sales s LEFT JOIN sale_items si ON si.sale_id = s.id WHERE s.store_id = $1 AND s.created_at::date = CURRENT_DATE AND s.status != 'cancelled'",
+        [req.storeId]
       ),
       pool.query(
-        'SELECT COUNT(*)::int AS bills, COALESCE(SUM(total), 0)::float8 AS amount FROM purchases WHERE created_at::date = CURRENT_DATE AND reversed_at IS NULL'
+        'SELECT COUNT(*)::int AS bills, COALESCE(SUM(total), 0)::float8 AS amount FROM purchases WHERE store_id = $1 AND created_at::date = CURRENT_DATE AND reversed_at IS NULL',
+        [req.storeId]
       ),
       pool.query(
-        "SELECT COUNT(DISTINCT s.id)::int AS bills, COALESCE(SUM((si.quantity - si.returned_qty) * si.unit_price * (1 + COALESCE(si.gst_rate,0)/100.0)), 0)::float8 AS revenue FROM sales s LEFT JOIN sale_items si ON si.sale_id = s.id WHERE s.created_at::date >= date_trunc('month', CURRENT_DATE)::date AND s.status != 'cancelled'"
+        "SELECT COUNT(DISTINCT s.id)::int AS bills, COALESCE(SUM((si.quantity - si.returned_qty) * si.unit_price * (1 + COALESCE(si.gst_rate,0)/100.0)), 0)::float8 AS revenue FROM sales s LEFT JOIN sale_items si ON si.sale_id = s.id WHERE s.store_id = $1 AND s.created_at::date >= date_trunc('month', CURRENT_DATE)::date AND s.status != 'cancelled'",
+        [req.storeId]
       ),
       pool.query(
-        'SELECT m.name FROM medicines m LEFT JOIN batches b ON b.medicine_id = m.id WHERE m.active = 1 GROUP BY m.id HAVING COALESCE(SUM(b.quantity), 0) <= m.low_stock_threshold ORDER BY COALESCE(SUM(b.quantity), 0) ASC'
+        'SELECT m.name FROM medicines m LEFT JOIN batches b ON b.medicine_id = m.id WHERE m.store_id = $1 AND m.active = 1 GROUP BY m.id HAVING COALESCE(SUM(b.quantity), 0) <= m.low_stock_threshold ORDER BY COALESCE(SUM(b.quantity), 0) ASC',
+        [req.storeId]
       ),
       pool.query(
-        'SELECT m.name, b.batch_number, (b.expiry_date - CURRENT_DATE) AS days_left FROM batches b JOIN medicines m ON m.id = b.medicine_id WHERE b.quantity > 0 AND b.expiry_date <= CURRENT_DATE + 90 ORDER BY b.expiry_date ASC'
+        'SELECT m.name, b.batch_number, (b.expiry_date - CURRENT_DATE) AS days_left FROM batches b JOIN medicines m ON m.id = b.medicine_id WHERE m.store_id = $1 AND b.quantity > 0 AND b.expiry_date <= CURRENT_DATE + 90 ORDER BY b.expiry_date ASC',
+        [req.storeId]
       ),
       pool.query(
-        "SELECT COALESCE(SUM(CASE WHEN bal > 0 THEN bal ELSE 0 END), 0)::float8 AS due, COUNT(*) FILTER (WHERE bal > 0.004)::int AS customers FROM (SELECT c.id, COALESCE(SUM(CASE l.kind WHEN 'credit' THEN l.amount ELSE -l.amount END), 0)::float8 AS bal FROM customers c LEFT JOIN customer_ledger l ON l.customer_id = c.id GROUP BY c.id) t"
+        "SELECT COALESCE(SUM(CASE WHEN bal > 0 THEN bal ELSE 0 END), 0)::float8 AS due, COUNT(*) FILTER (WHERE bal > 0.004)::int AS customers FROM (SELECT c.id, COALESCE(SUM(CASE l.kind WHEN 'credit' THEN l.amount ELSE -l.amount END), 0)::float8 AS bal FROM customers c LEFT JOIN customer_ledger l ON l.customer_id = c.id WHERE c.store_id = $1 GROUP BY c.id) t",
+        [req.storeId]
       ),
       pool.query('SELECT store_name FROM settings WHERE id = 1'),
     ]);
@@ -1243,23 +1364,28 @@ app.get('/api/whatsapp/summary', requireAuth, async (req, res, next) => {
 app.get('/api/reports/dashboard', requireAuth, async (req, res, next) => {
   try {
     const today = (await pool.query(
-      "SELECT COUNT(DISTINCT s.id)::int AS bills, COALESCE(SUM((si.quantity - si.returned_qty) * si.unit_price * (1 + COALESCE(si.gst_rate,0)/100.0)), 0)::float8 AS revenue FROM sales s LEFT JOIN sale_items si ON si.sale_id = s.id WHERE s.created_at::date = CURRENT_DATE AND s.status != 'cancelled'"
+      "SELECT COUNT(DISTINCT s.id)::int AS bills, COALESCE(SUM((si.quantity - si.returned_qty) * si.unit_price * (1 + COALESCE(si.gst_rate,0)/100.0)), 0)::float8 AS revenue FROM sales s LEFT JOIN sale_items si ON si.sale_id = s.id WHERE s.store_id = $1 AND s.created_at::date = CURRENT_DATE AND s.status != 'cancelled'",
+      [req.storeId]
     )).rows[0];
 
     const todayProfit = (await pool.query(
-      "SELECT COALESCE(SUM((si.unit_price - si.cost_price) * (si.quantity - si.returned_qty)), 0)::float8 AS profit FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE s.created_at::date = CURRENT_DATE AND s.status != 'cancelled'"
+      "SELECT COALESCE(SUM((si.unit_price - si.cost_price) * (si.quantity - si.returned_qty)), 0)::float8 AS profit FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE s.store_id = $1 AND s.created_at::date = CURRENT_DATE AND s.status != 'cancelled'",
+      [req.storeId]
     )).rows[0].profit;
 
     const last7 = (await pool.query(
-      "SELECT s.created_at::date AS day, COALESCE(SUM((si.quantity - si.returned_qty) * si.unit_price * (1 + COALESCE(si.gst_rate,0)/100.0)), 0)::float8 AS revenue, COUNT(DISTINCT s.id)::int AS bills FROM sales s LEFT JOIN sale_items si ON si.sale_id = s.id WHERE s.created_at::date >= CURRENT_DATE - 6 AND s.status != 'cancelled' GROUP BY day ORDER BY day"
+      "SELECT s.created_at::date AS day, COALESCE(SUM((si.quantity - si.returned_qty) * si.unit_price * (1 + COALESCE(si.gst_rate,0)/100.0)), 0)::float8 AS revenue, COUNT(DISTINCT s.id)::int AS bills FROM sales s LEFT JOIN sale_items si ON si.sale_id = s.id WHERE s.store_id = $1 AND s.created_at::date >= CURRENT_DATE - 6 AND s.status != 'cancelled' GROUP BY day ORDER BY day",
+      [req.storeId]
     )).rows;
 
     const alerts = (await pool.query(
-      'SELECT (SELECT COUNT(*)::int FROM (SELECT m.id FROM medicines m LEFT JOIN batches b ON b.medicine_id = m.id WHERE m.active = 1 GROUP BY m.id HAVING COALESCE(SUM(b.quantity), 0) <= m.low_stock_threshold) t_low) AS low, (SELECT COUNT(*)::int FROM batches WHERE quantity > 0 AND expiry_date <= CURRENT_DATE + 90) AS expiring'
+      'SELECT (SELECT COUNT(*)::int FROM (SELECT m.id FROM medicines m LEFT JOIN batches b ON b.medicine_id = m.id WHERE m.store_id = $1 AND m.active = 1 GROUP BY m.id HAVING COALESCE(SUM(b.quantity), 0) <= m.low_stock_threshold) t_low) AS low, (SELECT COUNT(*)::int FROM batches b JOIN medicines m ON m.id = b.medicine_id WHERE m.store_id = $1 AND b.quantity > 0 AND b.expiry_date <= CURRENT_DATE + 90) AS expiring',
+      [req.storeId]
     )).rows[0];
 
     const topSellers = (await pool.query(
-      "SELECT si.medicine_name AS name, si.company, SUM(si.quantity - si.returned_qty)::int AS qty, SUM((si.quantity - si.returned_qty) * si.unit_price)::float8 AS revenue FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE s.created_at::date >= CURRENT_DATE - 6 AND s.status != 'cancelled' GROUP BY si.medicine_id, si.medicine_name, si.company HAVING SUM(si.quantity - si.returned_qty) > 0 ORDER BY qty DESC LIMIT 5"
+      "SELECT si.medicine_name AS name, si.company, SUM(si.quantity - si.returned_qty)::int AS qty, SUM((si.quantity - si.returned_qty) * si.unit_price)::float8 AS revenue FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE s.store_id = $1 AND s.created_at::date >= CURRENT_DATE - 6 AND s.status != 'cancelled' GROUP BY si.medicine_id, si.medicine_name, si.company HAVING SUM(si.quantity - si.returned_qty) > 0 ORDER BY qty DESC LIMIT 5",
+      [req.storeId]
     )).rows;
 
     res.json({ today, todayProfit, last7, alerts, topSellers });
@@ -1276,34 +1402,34 @@ app.get('/api/reports/sales', requireAuth, async (req, res, next) => {
     const to = DATE_RE.test(qTo) ? qTo : new Date().toISOString().slice(0, 10);
 
     const summary = (await pool.query(
-      "SELECT COUNT(DISTINCT s.id)::int AS bills, COALESCE(SUM((si.quantity - si.returned_qty) * si.unit_price * (1 + COALESCE(si.gst_rate,0)/100.0)), 0)::float8 AS revenue, COALESCE(SUM(si.quantity - si.returned_qty), 0)::int AS units, COALESCE(SUM((si.unit_price - si.cost_price) * (si.quantity - si.returned_qty)), 0)::float8 AS profit FROM sales s LEFT JOIN sale_items si ON si.sale_id = s.id WHERE s.created_at::date BETWEEN $1 AND $2 AND s.status != 'cancelled'",
-      [from, to]
+      "SELECT COUNT(DISTINCT s.id)::int AS bills, COALESCE(SUM((si.quantity - si.returned_qty) * si.unit_price * (1 + COALESCE(si.gst_rate,0)/100.0)), 0)::float8 AS revenue, COALESCE(SUM(si.quantity - si.returned_qty), 0)::int AS units, COALESCE(SUM((si.unit_price - si.cost_price) * (si.quantity - si.returned_qty)), 0)::float8 AS profit FROM sales s LEFT JOIN sale_items si ON si.sale_id = s.id WHERE s.store_id = $3 AND s.created_at::date BETWEEN $1 AND $2 AND s.status != 'cancelled'",
+      [from, to, req.storeId]
     )).rows[0];
 
     // Cancellations, returns and written-off stock for the same window.
     const refunds = (await pool.query(
-      'SELECT COUNT(*)::int AS count, COALESCE(SUM(refund_amount),0)::float8 AS amount FROM sale_returns WHERE created_at::date BETWEEN $1 AND $2',
-      [from, to]
+      'SELECT COUNT(*)::int AS count, COALESCE(SUM(r.refund_amount),0)::float8 AS amount FROM sale_returns r JOIN sales s ON s.id = r.sale_id WHERE s.store_id = $3 AND r.created_at::date BETWEEN $1 AND $2',
+      [from, to, req.storeId]
     )).rows[0];
 
     const cancelled = (await pool.query(
-      "SELECT COUNT(*)::int AS count, COALESCE(SUM(total),0)::float8 AS amount FROM sales WHERE status = 'cancelled' AND created_at::date BETWEEN $1 AND $2",
-      [from, to]
+      "SELECT COUNT(*)::int AS count, COALESCE(SUM(total),0)::float8 AS amount FROM sales WHERE store_id = $3 AND status = 'cancelled' AND created_at::date BETWEEN $1 AND $2",
+      [from, to, req.storeId]
     )).rows[0];
 
     const writeoffs = (await pool.query(
-      'SELECT COUNT(*)::int AS count, COALESCE(SUM(quantity),0)::int AS units, COALESCE(SUM(cost_value),0)::float8 AS loss FROM stock_writeoffs WHERE created_at::date BETWEEN $1 AND $2',
-      [from, to]
+      'SELECT COUNT(*)::int AS count, COALESCE(SUM(quantity),0)::int AS units, COALESCE(SUM(cost_value),0)::float8 AS loss FROM stock_writeoffs WHERE store_id = $3 AND created_at::date BETWEEN $1 AND $2',
+      [from, to, req.storeId]
     )).rows[0];
 
     const bestSellers = (await pool.query(
-      "SELECT si.medicine_name AS name, si.company, SUM(si.quantity - si.returned_qty)::int AS qty, SUM((si.quantity - si.returned_qty) * si.unit_price)::float8 AS revenue, SUM((si.unit_price - si.cost_price) * (si.quantity - si.returned_qty))::float8 AS profit FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE s.created_at::date BETWEEN $1 AND $2 AND s.status != 'cancelled' GROUP BY si.medicine_id, si.medicine_name, si.company HAVING SUM(si.quantity - si.returned_qty) > 0 ORDER BY qty DESC LIMIT 10",
-      [from, to]
+      "SELECT si.medicine_name AS name, si.company, SUM(si.quantity - si.returned_qty)::int AS qty, SUM((si.quantity - si.returned_qty) * si.unit_price)::float8 AS revenue, SUM((si.unit_price - si.cost_price) * (si.quantity - si.returned_qty))::float8 AS profit FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE s.store_id = $3 AND s.created_at::date BETWEEN $1 AND $2 AND s.status != 'cancelled' GROUP BY si.medicine_id, si.medicine_name, si.company HAVING SUM(si.quantity - si.returned_qty) > 0 ORDER BY qty DESC LIMIT 10",
+      [from, to, req.storeId]
     )).rows;
 
     const sales = (await pool.query(
-      'SELECT s.id, s.invoice_number, s.total::float8 AS total, s.subtotal::float8 AS subtotal, s.gst_amount::float8 AS gst_amount, s.created_at, s.status, u.name AS served_by, COUNT(si.id)::int AS item_count, COALESCE(SUM(si.returned_qty),0)::int AS returned_units FROM sales s JOIN users u ON u.id = s.user_id LEFT JOIN sale_items si ON si.sale_id = s.id WHERE s.created_at::date BETWEEN $1 AND $2 GROUP BY s.id, u.name ORDER BY s.id DESC LIMIT 100',
-      [from, to]
+      'SELECT s.id, s.invoice_number, s.total::float8 AS total, s.subtotal::float8 AS subtotal, s.gst_amount::float8 AS gst_amount, s.created_at, s.status, u.name AS served_by, COUNT(si.id)::int AS item_count, COALESCE(SUM(si.returned_qty),0)::int AS returned_units FROM sales s JOIN users u ON u.id = s.user_id LEFT JOIN sale_items si ON si.sale_id = s.id WHERE s.store_id = $3 AND s.created_at::date BETWEEN $1 AND $2 GROUP BY s.id, u.name ORDER BY s.id DESC LIMIT 100',
+      [from, to, req.storeId]
     )).rows;
 
     res.json({ from, to, summary, refunds, cancelled, writeoffs, bestSellers, sales });
@@ -1315,22 +1441,38 @@ app.get('/api/reports/sales', requireAuth, async (req, res, next) => {
 // ---------------------------------------------------------------------------
 app.get('/api/settings', requireAuth, async (req, res, next) => {
   try {
-    const s = (await pool.query('SELECT * FROM settings WHERE id = 1')).rows[0];
+    let s = (await pool.query('SELECT * FROM settings WHERE store_id = $1', [req.storeId])).rows[0];
+    if (!s) {
+      // A freshly registered store without a settings row yet gets defaults.
+      const t = (await pool.query('SELECT store_name FROM tenants WHERE id = $1', [req.storeId])).rows[0];
+      s = (await pool.query(
+        'INSERT INTO settings (id, store_id, store_name, store_address, phone, license_number, gst_enabled, gst_number, currency) VALUES ($1, $1, $2, \'\', \'\', \'\', 0, \'\', \'\u20b9\') ON CONFLICT (id) DO UPDATE SET store_id = $1 RETURNING *',
+        [req.storeId, (t && t.store_name) || 'My Medical Store']
+      )).rows[0];
+    }
     res.json(s);
   } catch (e) { next(e); }
 });
 
 app.put('/api/settings', requireAuth, requireOwner, async (req, res, next) => {
   try {
-    const s = (await pool.query('SELECT * FROM settings WHERE id = 1')).rows[0];
+    let s = (await pool.query('SELECT * FROM settings WHERE store_id = $1', [req.storeId])).rows[0];
+    if (!s) {
+      const t = (await pool.query('SELECT store_name FROM tenants WHERE id = $1', [req.storeId])).rows[0];
+      s = (await pool.query(
+        'INSERT INTO settings (id, store_id, store_name, store_address, phone, license_number, gst_enabled, gst_number, currency) VALUES ($1, $1, $2, \'\', \'\', \'\', 0, \'\', \'\u20b9\') ON CONFLICT (id) DO UPDATE SET store_id = $1 RETURNING *',
+        [req.storeId, (t && t.store_name) || 'My Medical Store']
+      )).rows[0];
+    }
     const b = req.body || {};
     const updated = await pool.query(
-      'UPDATE settings SET store_name=$1, store_address=$2, phone=$3, license_number=$4, gst_enabled=$5, gst_number=$6 WHERE id=1 RETURNING *',
+      'UPDATE settings SET store_name=$1, store_address=$2, phone=$3, license_number=$4, gst_enabled=$5, gst_number=$6 WHERE store_id=$7 RETURNING *',
       [
         String(b.store_name ?? s.store_name).trim(), String(b.store_address ?? s.store_address).trim(),
         String(b.phone ?? s.phone).trim(), String(b.license_number ?? s.license_number).trim(),
         b.gst_enabled !== undefined ? (b.gst_enabled ? 1 : 0) : s.gst_enabled,
-        String(b.gst_number ?? s.gst_number).trim()
+        String(b.gst_number ?? s.gst_number).trim(),
+        req.storeId
       ]
     );
     res.json(updated.rows[0]);
@@ -1339,7 +1481,7 @@ app.put('/api/settings', requireAuth, requireOwner, async (req, res, next) => {
 
 app.get('/api/users', requireAuth, requireOwner, async (req, res, next) => {
   try {
-    const { rows } = await pool.query('SELECT id, username, name, role, active, created_at FROM users ORDER BY id');
+    const { rows } = await pool.query('SELECT id, username, name, role, active, created_at FROM users WHERE store_id = $1 ORDER BY id', [req.storeId]);
     res.json(rows);
   } catch (e) { next(e); }
 });
@@ -1350,7 +1492,7 @@ app.post('/api/users', requireAuth, requireOwner, async (req, res, next) => {
     if (!username?.trim() || !password || !name?.trim()) return bad(res, 400, 'Name, username and password are required');
     if (String(password).length < 5) return bad(res, 400, 'Password must be at least 5 characters');
     if (!['owner', 'employee'].includes(role)) return bad(res, 400, 'Invalid role');
-    await addUser(String(username).trim(), String(password), String(name).trim(), role);
+    await addUser(String(username).trim(), String(password), String(name).trim(), role, req.storeId);
     res.json({ ok: true });
   } catch (e) {
     if (String(e.message).includes('unique_constraint') || String(e.message).includes('duplicate key')) {
@@ -1362,7 +1504,7 @@ app.post('/api/users', requireAuth, requireOwner, async (req, res, next) => {
 
 app.put('/api/users/:id', requireAuth, requireOwner, async (req, res, next) => {
   try {
-    const u = (await pool.query('SELECT * FROM users WHERE id = $1', [asId(req.params.id)])).rows[0];
+    const u = (await pool.query('SELECT * FROM users WHERE id = $1 AND store_id = $2', [asId(req.params.id), req.storeId])).rows[0];
     if (!u) return bad(res, 404, 'User not found');
     const b = req.body || {};
     if (u.id === req.user.id && b.active === false) return bad(res, 400, 'You cannot deactivate your own account');
@@ -1376,7 +1518,7 @@ app.put('/api/users/:id', requireAuth, requireOwner, async (req, res, next) => {
 /** Owner resets a staff password (for the "I forgot my password" case). */
 app.post('/api/users/:id/reset-password', requireAuth, requireOwner, async (req, res, next) => {
   try {
-    const u = (await pool.query('SELECT * FROM users WHERE id = $1', [asId(req.params.id)])).rows[0];
+    const u = (await pool.query('SELECT * FROM users WHERE id = $1 AND store_id = $2', [asId(req.params.id), req.storeId])).rows[0];
     if (!u) return bad(res, 404, 'User not found');
     const pw = String(req.body?.new_password || '');
     if (pw.length < 6) return bad(res, 400, 'Password must be at least 6 characters');
@@ -1507,8 +1649,8 @@ app.post('/api/import/commit', requireAuth, requireOwner, async (req, res, next)
         let med = medCache.get(cacheKey);
         if (med === undefined) {
           const found = (await client.query(
-            'SELECT id, active FROM medicines WHERE lower(name) = lower($1) AND lower(company) = lower($2) ORDER BY id LIMIT 1',
-            [nm, co]
+            'SELECT id, active FROM medicines WHERE lower(name) = lower($1) AND lower(company) = lower($2) AND store_id = $3 ORDER BY id LIMIT 1',
+            [nm, co, req.storeId]
           )).rows[0];
           med = found || null;
           medCache.set(cacheKey, med);
@@ -1522,8 +1664,8 @@ app.post('/api/import/commit', requireAuth, requireOwner, async (req, res, next)
           let gst = importNumber(r.gst_rate);
           if (!isFinite(gst) || gst < 0 || gst > 100) gst = 12;
           const ins = await client.query(
-            'INSERT INTO medicines (name, company, type, shelf, buy_price, sell_price, gst_rate, low_stock_threshold, logo_url) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id',
-            [nm, co, type, shelf, buy, sell, gst, 10, logoFor(co)]
+            'INSERT INTO medicines (name, company, type, shelf, buy_price, sell_price, gst_rate, low_stock_threshold, logo_url, store_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id',
+            [nm, co, type, shelf, buy, sell, gst, 10, logoFor(co), req.storeId]
           );
           med = { id: ins.rows[0].id, active: 1 };
           medCache.set(cacheKey, med);
@@ -1558,7 +1700,7 @@ app.post('/api/import/commit', requireAuth, requireOwner, async (req, res, next)
               await client.query('UPDATE batches SET quantity = quantity + $1, expiry_date = $2 WHERE id = $3', [qty, expiryISO, existing.id]);
               summary.batches_updated++;
             } else {
-              await client.query('INSERT INTO batches (medicine_id, batch_number, expiry_date, quantity) VALUES ($1, $2, $3, $4)', [med.id, bn, expiryISO, qty]);
+              await client.query('INSERT INTO batches (medicine_id, batch_number, expiry_date, quantity, store_id) VALUES ($1, $2, $3, $4, $5)', [med.id, bn, expiryISO, qty, req.storeId]);
               summary.batches_added++;
             }
           }
@@ -1575,59 +1717,10 @@ app.post('/api/import/commit', requireAuth, requireOwner, async (req, res, next)
 // Controls all 100+ pharmacy clients (tenants), subscriptions, MRR & kill-switch
 // ---------------------------------------------------------------------------
 
-async function ensureTenantsTable() {
-  try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS tenants (
-        id SERIAL PRIMARY KEY,
-        store_name TEXT NOT NULL,
-        owner_name TEXT NOT NULL,
-        phone VARCHAR(30) NOT NULL,
-        email VARCHAR(255) DEFAULT '',
-        city VARCHAR(100) DEFAULT '',
-        state VARCHAR(100) DEFAULT '',
-        address TEXT DEFAULT '',
-        license_number VARCHAR(100) DEFAULT '',
-        plan VARCHAR(50) NOT NULL DEFAULT 'trial',
-        status VARCHAR(50) NOT NULL DEFAULT 'trial',
-        price_per_month NUMERIC(10, 2) NOT NULL DEFAULT 999.00,
-        trial_ends_at TIMESTAMPTZ NOT NULL DEFAULT (CURRENT_TIMESTAMP + interval '30 days'),
-        subscription_ends_at TIMESTAMPTZ,
-        total_bills INTEGER NOT NULL DEFAULT 0,
-        total_medicines INTEGER NOT NULL DEFAULT 0,
-        last_active_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-
-    // Seed realistic pharmacy clients if empty
-    const { rows } = await pool.query('SELECT COUNT(*)::int AS count FROM tenants');
-    if (rows[0].count === 0) {
-      await pool.query(`
-        INSERT INTO tenants (store_name, owner_name, phone, city, state, license_number, plan, status, price_per_month, trial_ends_at, subscription_ends_at, total_bills, total_medicines, last_active_at, created_at)
-        VALUES
-          ('Apollo Medicos', 'Suresh Sharma', '+91 98234 11223', 'Mumbai', 'Maharashtra', 'DL-MH-2024-991', 'monthly', 'active', 999.00, now() - interval '60 days', now() + interval '24 days', 1420, 850, now() - interval '10 minutes', now() - interval '90 days'),
-          ('Gupta Chemist & Druggist', 'Rajesh Gupta', '+91 98111 22334', 'Delhi', 'Delhi', 'DL-DL-2024-442', 'monthly', 'active', 999.00, now() - interval '45 days', now() + interval '12 days', 980, 620, now() - interval '25 minutes', now() - interval '75 days'),
-          ('City Pharmacy & Surgical', 'Mohammed Naved', '+91 99887 76655', 'Lucknow', 'Uttar Pradesh', 'DL-UP-2024-118', 'yearly', 'active', 833.00, now() - interval '120 days', now() + interval '210 days', 3420, 1420, now() - interval '5 minutes', now() - interval '150 days'),
-          ('Al-Shifa Medical Store', 'Dr. Farhan Ali', '+91 97654 32109', 'Hyderabad', 'Telangana', 'DL-TS-2024-773', 'monthly', 'active', 999.00, now() - interval '30 days', now() + interval '2 days', 640, 480, now() - interval '1 hour', now() - interval '60 days'),
-          ('Metro Care Pharmacy', 'Anil Verma', '+91 98333 44556', 'Bangalore', 'Karnataka', 'DL-KA-2024-301', 'trial', 'trial', 999.00, now() + interval '3 days', null, 145, 230, now() - interval '2 hours', now() - interval '27 days'),
-          ('Sharma Medical Hall', 'Vikram Sharma', '+91 98777 66554', 'Jaipur', 'Rajasthan', 'DL-RJ-2024-812', 'trial', 'trial', 999.00, now() + interval '18 days', null, 82, 190, now() - interval '4 hours', now() - interval '12 days'),
-          ('Modern Chemist', 'Amit Patel', '+91 98980 12345', 'Ahmedabad', 'Gujarat', 'DL-GJ-2024-521', 'monthly', 'active', 999.00, now() - interval '90 days', now() + interval '18 days', 1890, 950, now() - interval '30 minutes', now() - interval '120 days'),
-          ('Kolkata Life Care', 'Subhash Bose', '+91 98310 98765', 'Kolkata', 'West Bengal', 'DL-WB-2024-609', 'trial', 'trial', 999.00, now() + interval '1 day', null, 110, 310, now() - interval '3 hours', now() - interval '29 days'),
-          ('Janata Aushadhi Kendra', 'Pankaj Tiwari', '+91 94500 11223', 'Varanasi', 'Uttar Pradesh', 'DL-UP-2024-904', 'trial', 'expired', 999.00, now() - interval '4 days', null, 95, 140, now() - interval '5 days', now() - interval '34 days'),
-          ('National Pharmacy', 'Sunil Deshmukh', '+91 98220 55443', 'Pune', 'Maharashtra', 'DL-MH-2024-114', 'monthly', 'suspended', 999.00, now() - interval '60 days', now() - interval '8 days', 430, 290, now() - interval '8 days', now() - interval '80 days')
-      `);
-    }
-  } catch (err) {
-    console.error('ensureTenantsTable error:', err);
-  }
-}
-ensureTenantsTable();
-
 // 1. Founder Platform Summary (MRR, Total Tenants, Active Subscriptions, Expiring Trials)
-app.get('/api/founder/stats', requireAuth, requireOwner, async (req, res, next) => {
+app.get('/api/founder/stats', requireAuth, requirePlatformAdmin, async (req, res, next) => {
   try {
-    await ensureTenantsTable();
+    await ensureSchema();
     const statsQuery = await pool.query(`
       SELECT
         COUNT(*)::int AS total_tenants,
@@ -1661,9 +1754,9 @@ app.get('/api/founder/stats', requireAuth, requireOwner, async (req, res, next) 
 });
 
 // 2. Tenants Directory List with Search & Status Filter
-app.get('/api/founder/tenants', requireAuth, requireOwner, async (req, res, next) => {
+app.get('/api/founder/tenants', requireAuth, requirePlatformAdmin, async (req, res, next) => {
   try {
-    await ensureTenantsTable();
+    await ensureSchema();
     const q = String(req.query.q || '').trim();
     const status = String(req.query.status || 'all').trim();
     const like = '%' + q + '%';
@@ -1701,9 +1794,9 @@ app.get('/api/founder/tenants', requireAuth, requireOwner, async (req, res, next
 });
 
 // 3. Onboard New Pharmacy Client / Store Provisioning
-app.post('/api/founder/tenants', requireAuth, requireOwner, async (req, res, next) => {
+app.post('/api/founder/tenants', requireAuth, requirePlatformAdmin, async (req, res, next) => {
   try {
-    await ensureTenantsTable();
+    await ensureSchema();
     const {
       store_name,
       owner_name,
@@ -1750,6 +1843,20 @@ app.post('/api/founder/tenants', requireAuth, requireOwner, async (req, res, nex
 
     const newTenant = rows[0];
 
+    // Create the store's REAL owner login (globally-unique username) plus its
+    // settings row, so the customer can sign in to their own isolated store.
+    let uname = String(phone).replace(/[^\d]/g, '').slice(-10) || ('store' + newTenant.id);
+    const taken = (await pool.query('SELECT id FROM users WHERE username = $1', [uname])).rows[0];
+    if (taken) uname = uname + newTenant.id;
+    const initialPassword = 'medistock' + String(newTenant.id) + 'ok';
+    await addUser(uname, initialPassword, String(owner_name).trim(), 'owner', newTenant.id);
+    await pool.query(
+      `INSERT INTO settings (id, store_id, store_name, store_address, phone, license_number, gst_enabled, gst_number, currency)
+       VALUES ($1, $1, $2, $3, $4, $5, 0, '', '₹')
+       ON CONFLICT (id) DO UPDATE SET store_id = $1`,
+      [newTenant.id, String(store_name).trim(), String(address || '').trim(), String(phone).trim(), String(license_number || '').trim()]
+    );
+
     // Build ready-to-send WhatsApp onboarding text for the client
     const cleanPhone = String(phone).replace(/[^\d]/g, '');
     const loginUrl = 'https://client-tau-eight-75.vercel.app';
@@ -1757,10 +1864,10 @@ app.post('/api/founder/tenants', requireAuth, requireOwner, async (req, res, nex
       `🏥 *Namaste ${owner_name}! Welcome to MediStock Pharmacy Software.*\n\n` +
       `Aapka medical store *${store_name}* setup ho gaya hai!\n\n` +
       `🔗 *Login URL:* ${loginUrl}\n` +
-      `👤 *Username:* ${cleanPhone.slice(-10)}\n` +
-      `🔑 *Initial Password:* medistock123\n` +
+      `👤 *Username:* ${uname}\n` +
+      `🔑 *Initial Password:* ${initialPassword}\n` +
       `📅 *Free Trial Validity:* ${trialDuration} Days (Until ${new Date(Date.now() + trialDuration * 86400000).toLocaleDateString('en-IN')})\n\n` +
-      `Agar koi madad chahiye toh isi number par WhatsApp karein. Thank you!`
+      `Login ke baad Settings se apna password badal lein. Madad ke liye isi number par WhatsApp karein. Thank you!`
     );
 
     const waLink = `https://wa.me/91${cleanPhone.slice(-10)}?text=${waText}`;
@@ -1768,13 +1875,14 @@ app.post('/api/founder/tenants', requireAuth, requireOwner, async (req, res, nex
     res.json({
       tenant: newTenant,
       whatsappLink: waLink,
-      initialPassword: 'medistock123',
+      initialPassword,
+      username: uname,
     });
   } catch (e) { next(e); }
 });
 
 // 4. Remote Kill-Switch (Activate / Suspend / Lock Access)
-app.put('/api/founder/tenants/:id/status', requireAuth, requireOwner, async (req, res, next) => {
+app.put('/api/founder/tenants/:id/status', requireAuth, requirePlatformAdmin, async (req, res, next) => {
   try {
     const id = asId(req.params.id);
     const { status } = req.body || {};
@@ -1791,7 +1899,7 @@ app.put('/api/founder/tenants/:id/status', requireAuth, requireOwner, async (req
 });
 
 // 5. Extend Trial Duration (+15 / +30 Days)
-app.put('/api/founder/tenants/:id/extend-trial', requireAuth, requireOwner, async (req, res, next) => {
+app.put('/api/founder/tenants/:id/extend-trial', requireAuth, requirePlatformAdmin, async (req, res, next) => {
   try {
     const id = asId(req.params.id);
     const days = parseInt(req.body?.days, 10) || 15;
@@ -1809,7 +1917,7 @@ app.put('/api/founder/tenants/:id/extend-trial', requireAuth, requireOwner, asyn
 });
 
 // 6. Change Subscription Plan (Trial -> Paid Monthly / Yearly)
-app.put('/api/founder/tenants/:id/plan', requireAuth, requireOwner, async (req, res, next) => {
+app.put('/api/founder/tenants/:id/plan', requireAuth, requirePlatformAdmin, async (req, res, next) => {
   try {
     const id = asId(req.params.id);
     const { plan, duration_months } = req.body || {};
@@ -1834,7 +1942,7 @@ app.put('/api/founder/tenants/:id/plan', requireAuth, requireOwner, async (req, 
 });
 
 // 7. Impersonate Tenant / Remote Access Token
-app.post('/api/founder/tenants/:id/impersonate', requireAuth, requireOwner, async (req, res, next) => {
+app.post('/api/founder/tenants/:id/impersonate', requireAuth, requirePlatformAdmin, async (req, res, next) => {
   try {
     const id = asId(req.params.id);
     const tenant = (await pool.query('SELECT * FROM tenants WHERE id = $1', [id])).rows[0];
@@ -1960,12 +2068,8 @@ app.post('/api/billing/create-order', requireAuth, async (req, res, next) => {
     const plan = BILLING_PLANS[planId];
     if (!plan) return bad(res, 400, 'Invalid plan');
 
-    // Which tenant does this logged-in user belong to? The POS owner's store
-    // is matched by username to the tenant's store phone (last 10 digits).
-    const uname = String(req.user.username || '');
-    const tenants = (await pool.query('SELECT id, store_name FROM tenants ORDER BY id')).rows;
-    const t = tenants.find((x) => uname.endsWith(String(x.id))) || tenants.find((x) => x.store_name === req.user.name) || null;
-
+    // The logged-in user always belongs to exactly one store.
+    const t = (await pool.query('SELECT id, store_name FROM tenants WHERE id = $1', [req.storeId])).rows[0];
     if (!t) return bad(res, 404, 'No store subscription is linked to this account. Ask your MediStock partner to link it.');
 
     const order = await rp.orders.create({
@@ -2037,7 +2141,7 @@ app.post('/api/billing/webhook', express.raw({ type: '*/*', limit: '1mb' }), asy
 // Founder panel: create a hosted Razorpay Payment Link for a tenant and get a
 // ready WhatsApp share text. The customer pays on Razorpay's own page (UPI /
 // cards / netbanking) — no personal UPI ID is ever shown.
-app.post('/api/founder/tenants/:id/payment-link', requireAuth, requireOwner, async (req, res, next) => {
+app.post('/api/founder/tenants/:id/payment-link', requireAuth, requirePlatformAdmin, async (req, res, next) => {
   try {
     const rp = getRazorpay();
     if (!rp) return bad(res, 503, 'Payment gateway is not configured yet. Add RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET env vars.');
@@ -2086,7 +2190,7 @@ app.post('/api/founder/tenants/:id/payment-link', requireAuth, requireOwner, asy
 });
 
 // Founder panel: recent payments ledger
-app.get('/api/founder/payments', requireAuth, requireOwner, async (req, res, next) => {
+app.get('/api/founder/payments', requireAuth, requirePlatformAdmin, async (req, res, next) => {
   try {
     const { rows } = await pool.query(
       `SELECT p.*, t.store_name, t.owner_name, t.phone
