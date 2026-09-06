@@ -196,7 +196,7 @@ function requireAuth(req, res, next) {
     const token = h.startsWith('Bearer ') ? h.slice(7) : null;
     if (!token) return res.status(401).json({ error: 'Not logged in', code: 'session_invalid' });
     return pool.query(
-      'SELECT s.token, u.id, u.username, u.name, u.role, u.active, u.store_id, u.platform_admin FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = $1 AND s.expires_at > now()',
+      "SELECT s.token, u.id, u.username, u.name, u.role, u.active, u.store_id, u.platform_admin, t.status AS tenant_status, t.trial_ends_at, t.subscription_ends_at FROM sessions s JOIN users u ON u.id = s.user_id LEFT JOIN tenants t ON t.id = u.store_id WHERE s.token = $1 AND s.expires_at > now()",
       [token]
     ).then(({ rows }) => {
       const row = rows[0];
@@ -208,6 +208,22 @@ function requireAuth(req, res, next) {
                    storeId: row.store_id, platformAdmin: row.platform_admin === 1 };
       req.storeId = row.store_id;
       req.token = token;
+      // Kill-switch & trial enforcement: a suspended/expired store stops
+      // working everywhere EXCEPT auth and billing, so the paywall itself
+      // stays reachable and a renewal can unlock the store again.
+      const openPath = req.path.startsWith('/api/auth') || req.path.startsWith('/api/billing');
+      if (!openPath && !row.platform_admin && row.store_id) {
+        const nowMs = Date.now();
+        const st = row.tenant_status;
+        const trialOver = st === 'trial' && row.trial_ends_at && new Date(row.trial_ends_at).getTime() < nowMs;
+        const subOver = st === 'active' && row.subscription_ends_at && new Date(row.subscription_ends_at).getTime() < nowMs;
+        if (st === 'suspended' || st === 'expired' || trialOver || subOver) {
+          return res.status(403).json({
+            error: 'Store locked — trial khatam ya payment pending. Renew karke turant unlock karein.',
+            code: 'subscription_locked',
+          });
+        }
+      }
       next();
     });
   }).catch(next);
@@ -306,6 +322,24 @@ app.post('/api/auth/login', async (req, res, next) => {
     await pool.query('INSERT INTO login_attempts (username, ip, success) VALUES ($1, $2, $3)',
       [uname.slice(0, 255), ip.slice(0, 100), 1]);
     await pool.query("DELETE FROM login_attempts WHERE created_at < now() - interval '2 days'");
+
+    // Kill-switch & trial enforcement at the front door: a suspended or
+    // expired store cannot even log in (renewal re-opens it instantly).
+    if (u.store_id) {
+      const t = (await pool.query('SELECT status, trial_ends_at, subscription_ends_at FROM tenants WHERE id = $1', [u.store_id])).rows[0];
+      if (t) {
+        const nowMs = Date.now();
+        const trialOver = t.status === 'trial' && t.trial_ends_at && new Date(t.trial_ends_at).getTime() < nowMs;
+        const subOver = t.status === 'active' && t.subscription_ends_at && new Date(t.subscription_ends_at).getTime() < nowMs;
+        if (t.status === 'suspended' || t.status === 'expired' || trialOver || subOver) {
+          return res.status(403).json({
+            error: 'Aapka store account locked hai — trial khatam ya payment pending. Renewal ke liye MediStock support se sampark karein.',
+            code: 'subscription_locked',
+          });
+        }
+      }
+    }
+
     const token = await createSession(u.id);
     res.json({ token, user: { id: u.id, username: u.username, name: u.name, role: u.role, platform_admin: u.platform_admin === 1, store_id: u.store_id } });
   } catch (e) { next(e); }
@@ -1730,8 +1764,8 @@ app.get('/api/founder/stats', requireAuth, requirePlatformAdmin, async (req, res
         COUNT(*) FILTER (WHERE status = 'suspended')::int AS suspended_tenants,
         COUNT(*) FILTER (WHERE status = 'trial' AND trial_ends_at BETWEEN now() AND now() + interval '3 days')::int AS expiring_soon_trials,
         COALESCE(SUM(CASE WHEN status = 'active' THEN price_per_month ELSE 0 END), 0)::float8 AS mrr,
-        COALESCE(SUM(total_bills), 0)::int AS platform_total_bills,
-        COALESCE(SUM(total_medicines), 0)::int AS platform_total_medicines
+        (SELECT COUNT(*)::int FROM sales) AS platform_total_bills,
+        (SELECT COUNT(*)::int FROM medicines WHERE active = 1) AS platform_total_medicines
       FROM tenants
     `);
 
@@ -1765,11 +1799,13 @@ app.get('/api/founder/tenants', requireAuth, requirePlatformAdmin, async (req, r
       SELECT
         id, store_name, owner_name, phone, email, city, state, license_number,
         plan, status, price_per_month::float8 AS price_per_month,
-        trial_ends_at, subscription_ends_at, total_bills, total_medicines,
+        trial_ends_at, subscription_ends_at,
+        (SELECT COUNT(*) FROM sales s WHERE s.store_id = t.id)::int AS total_bills,
+        (SELECT COUNT(*) FROM medicines m WHERE m.store_id = t.id AND m.active = 1)::int AS total_medicines,
         last_active_at, created_at,
         ROUND(EXTRACT(EPOCH FROM (trial_ends_at - now())) / 86400)::int AS trial_days_left,
         ROUND(EXTRACT(EPOCH FROM (subscription_ends_at - now())) / 86400)::int AS sub_days_left
-      FROM tenants
+      FROM tenants t
       WHERE (store_name ILIKE $1 OR owner_name ILIKE $1 OR phone ILIKE $1 OR city ILIKE $1)
     `;
     const params = [like];
@@ -1817,13 +1853,15 @@ app.post('/api/founder/tenants', requireAuth, requirePlatformAdmin, async (req, 
     const trialDuration = parseInt(trial_days, 10) || 14;
     const assignedPlan = ['monthly', 'yearly', 'lifetime'].includes(plan) ? plan : 'trial';
     const status = assignedPlan === 'trial' ? 'trial' : 'active';
-    const price = assignedPlan === 'yearly' ? 833.00 : 999.00;
+    const perMonth = { monthly: 599.00, yearly: 416.00, lifetime: 277.00 }; // matches BILLING_PLANS
+    const planMonths = { monthly: 1, yearly: 12, lifetime: 36 };
+    const price = perMonth[assignedPlan] || 599.00;
 
     const { rows } = await pool.query(
       `INSERT INTO tenants (
         store_name, owner_name, phone, email, city, state, address, license_number,
         plan, status, price_per_month, trial_ends_at, subscription_ends_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now() + make_interval(days => $12::int), CASE WHEN $9 = 'trial' THEN NULL ELSE now() + interval '30 days' END)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now() + make_interval(days => $12::int), CASE WHEN $9 = 'trial' THEN NULL ELSE now() + make_interval(months => $13::int) END)
       RETURNING *`,
       [
         String(store_name).trim(),
@@ -1838,6 +1876,7 @@ app.post('/api/founder/tenants', requireAuth, requirePlatformAdmin, async (req, 
         status,
         price,
         trialDuration,
+        planMonths[assignedPlan] || 1,
       ]
     );
 
@@ -1924,8 +1963,10 @@ app.put('/api/founder/tenants/:id/plan', requireAuth, requirePlatformAdmin, asyn
     const valid = ['trial', 'monthly', 'yearly', 'lifetime'];
     if (!valid.includes(plan)) return bad(res, 400, 'Invalid plan type');
 
-    const months = parseInt(duration_months, 10) || (plan === 'yearly' ? 12 : 1);
-    const price = plan === 'yearly' ? 833.00 : 999.00;
+    const defaultMonths = { monthly: 1, yearly: 12, lifetime: 36 };
+    const perMonth = { monthly: 599.00, yearly: 416.00, lifetime: 277.00 }; // matches Razorpay BILLING_PLANS
+    const months = parseInt(duration_months, 10) || defaultMonths[plan] || 1;
+    const price = perMonth[plan] || 599.00;
 
     const { rows } = await pool.query(
       `UPDATE tenants
@@ -1948,12 +1989,18 @@ app.post('/api/founder/tenants/:id/impersonate', requireAuth, requirePlatformAdm
     const tenant = (await pool.query('SELECT * FROM tenants WHERE id = $1', [id])).rows[0];
     if (!tenant) return bad(res, 404, 'Tenant not found');
 
-    // Create session token for remote inspection
-    const token = await createSession(req.user.id);
+    // Real impersonation: create a session for THIS store's owner user, so
+    // the founder lands inside the customer's actual store view.
+    const owner = (await pool.query(
+      "SELECT id FROM users WHERE store_id = $1 AND role = 'owner' AND active = 1 ORDER BY id LIMIT 1",
+      [id]
+    )).rows[0];
+    if (!owner) return bad(res, 409, 'This store has no active owner login yet — onboard it first');
+    const token = await createSession(owner.id);
     res.json({
       token,
       tenant,
-      redirectUrl: `https://client-tau-eight-75.vercel.app?tenant_id=${tenant.id}`,
+      redirectUrl: 'https://client-tau-eight-75.vercel.app/#impersonate_token=' + token,
     });
   } catch (e) { next(e); }
 });

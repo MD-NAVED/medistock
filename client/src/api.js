@@ -36,8 +36,14 @@ export async function api(path, { method = 'GET', body } = {}) {
         window.location.replace('/login?expired=1');
       }
     }
+    // Store locked by the founder (kill-switch) or trial/subscription over —
+    // send the user to the paywall where they can renew and unlock instantly.
+    if (res.status === 403 && data?.code === 'subscription_locked' && !window.location.pathname.startsWith('/subscription')) {
+      window.location.replace('/subscription?locked=1');
+    }
     const err = new Error((data && data.error) || 'Request failed');
     err.status = res.status;
+    err.code = data && data.code;
     throw err;
   }
   // A 2xx with an unparseable body (e.g. an HTML fallback page) must never

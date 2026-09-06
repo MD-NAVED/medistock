@@ -17,6 +17,7 @@ import { fmtDate } from '../utils';
  */
 
 export default function Subscription() {
+  const locked = new URLSearchParams(window.location.search).get('locked') === '1';
   const [plans, setPlans] = useState([]);
   const [gateway, setGateway] = useState('not_configured');
   const [selected, setSelected] = useState('yearly');
@@ -96,6 +97,12 @@ export default function Subscription() {
 
   return (
     <Box sx={{ maxWidth: 760, mx: 'auto' }}>
+      {locked && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          Aapki trial/subscription khatam ho gayi hai — store lock ho gaya hai.
+          Neeche se plan chun kar pay karein, payment hote hi turant unlock ho jayega.
+        </Alert>
+      )}
       <Paper sx={{ p: { xs: 2.5, md: 4 }, textAlign: 'center', mb: 3, background: 'linear-gradient(135deg,#0b695c 0%,#0d8a75 100%)', color: '#fff' }}>
         <WorkspacePremiumIcon sx={{ fontSize: 48, mb: 1 }} />
         <Typography variant="h5" sx={{ fontWeight: 700 }}>
