@@ -129,26 +129,27 @@ export default function Settings() {
 
       <Paper sx={{ mb: 3 }}>
         <Tabs value={tab} onChange={(e, v) => setTab(v)} variant={isMobile ? 'scrollable' : 'standard'} scrollButtons="auto">
-          <Tab label="🏪 Store" />
-          <Tab label={`👥 Users (${users.length})`} />
-          <Tab label="🔐 Security" />
-          <Tab label="📥 Import Data" />
+          <Tab label={isMobile ? 'Store' : '🏪 Store'} />
+          <Tab label={isMobile ? 'Users' : `👥 Users (${users.length})`} />
+          <Tab label={isMobile ? 'Security' : '🔐 Security'} />
+          <Tab label={isMobile ? 'Import' : '📥 Import Data'} />
         </Tabs>
       </Paper>
 
       {tab === 0 && (
         <Paper sx={{ p: { xs: 2, md: 4 }, maxWidth: 720 }}>
-          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 2.5 }}>
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 2.5, '& > *': { minWidth: 0 } }}>
             <TextField label="Store Name" value={store.store_name} onChange={(e) => setStore({ ...store, store_name: e.target.value })} />
             <TextField label="Phone" value={store.phone} onChange={(e) => setStore({ ...store, phone: e.target.value })} />
             <TextField label="Address" value={store.store_address} onChange={(e) => setStore({ ...store, store_address: e.target.value })} sx={{ gridColumn: { sm: '1 / -1' } }} />
             <TextField label="Drug License No." value={store.license_number} onChange={(e) => setStore({ ...store, license_number: e.target.value })} />
-            <Box sx={{ border: '1px solid #e0e6e4', borderRadius: 2, p: 2 }}>
+            <Box sx={{ border: '1px solid #e0e6e4', borderRadius: 2, p: 2, width: '100%', minWidth: 0 }}>
               <FormControlLabel
+                sx={{ m: 0 }}
                 control={<Switch checked={!!store.gst_enabled} onChange={(e) => setStore({ ...store, gst_enabled: e.target.checked })} />}
                 label={<Typography sx={{ fontWeight: 600 }}>GST billing enabled</Typography>}
               />
-              <Typography variant="caption" color="text.secondary">
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5, overflowWrap: 'break-word' }}>
                 When ON, each medicine's GST % is added on top of the price on every bill.
               </Typography>
               {store.gst_enabled && (

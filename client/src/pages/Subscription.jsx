@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Box, Typography, Paper, Button, Chip, Alert, Snackbar, CircularProgress,
-  Divider, Stack, Grid, ToggleButtonGroup, ToggleButton,
+  Divider, Stack, Grid, ToggleButtonGroup, ToggleButton, useMediaQuery,
 } from '@mui/material';
 import WorkspacePremiumIcon from '@mui/icons-material/WorkspacePremium';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
@@ -44,6 +44,7 @@ const inr = (paise) => '₹' + (paise / 100).toLocaleString('en-IN');
 export default function Subscription() {
   const locked = new URLSearchParams(window.location.search).get('locked') === '1';
   const { user } = useAuth();
+  const isNarrow = useMediaQuery('(max-width:600px)');
   const [plans, setPlans] = useState([]);
   const [gateway, setGateway] = useState('not_configured');
   const [selectedPlan, setSelectedPlan] = useState('pro-yearly');
@@ -170,8 +171,10 @@ export default function Subscription() {
           }}
         >
           <ToggleButton value="monthly">Monthly</ToggleButton>
-          <ToggleButton value="yearly">Yearly&nbsp;<strong style={{ color: '#0b695c' }}>(save 2 months)</strong></ToggleButton>
-          <ToggleButton value="founder">3-Year Founder Pack</ToggleButton>
+          <ToggleButton value="yearly">
+            Yearly{!isNarrow && <>&nbsp;<strong style={{ color: '#0b695c' }}>(save 2 months)</strong></>}
+          </ToggleButton>
+          <ToggleButton value="founder">{isNarrow ? '3-Yr Pack' : '3-Year Founder Pack'}</ToggleButton>
         </ToggleButtonGroup>
       </Stack>
 
