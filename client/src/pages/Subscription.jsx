@@ -5,7 +5,6 @@ import {
 } from '@mui/material';
 import WorkspacePremiumIcon from '@mui/icons-material/WorkspacePremium';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import CloseIcon from '@mui/icons-material/Close';
 import BoltIcon from '@mui/icons-material/Bolt';
 import RocketLaunchIcon from '@mui/icons-material/RocketLaunch';
 import { api } from '../api';
@@ -214,19 +213,12 @@ export default function Subscription() {
 
                 <Divider sx={{ my: 1.5 }} />
                 <Stack spacing={0.75}>
-                  {FEATURE_ROWS.map((row) => {
-                    const has = row.tiers.includes(tier);
-                    return (
-                      <Stack key={row.label} direction="row" spacing={1} alignItems="center">
-                        {has
-                          ? <CheckCircleIcon sx={{ fontSize: 17, color: 'success.main' }} />
-                          : <CloseIcon sx={{ fontSize: 15, color: 'text.disabled' }} />}
-                        <Typography variant="caption" sx={{ color: has ? 'text.primary' : 'text.disabled' }}>
-                          {row.label}
-                        </Typography>
-                      </Stack>
-                    );
-                  })}
+                  {FEATURE_ROWS.filter((row) => row.tiers.includes(tier)).map((row) => (
+                    <Stack key={row.label} direction="row" spacing={1} alignItems="center">
+                      <CheckCircleIcon sx={{ fontSize: 17, color: 'success.main' }} />
+                      <Typography variant="caption">{row.label}</Typography>
+                    </Stack>
+                  ))}
                 </Stack>
               </Paper>
             </Grid>
