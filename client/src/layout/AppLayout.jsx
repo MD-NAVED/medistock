@@ -16,6 +16,7 @@ import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive';
 import BarChartIcon from '@mui/icons-material/BarChart';
 import SettingsIcon from '@mui/icons-material/Settings';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
+import WorkspacePremiumIcon from '@mui/icons-material/WorkspacePremium';
 import { api } from '../api';
 import { useAuth } from '../auth';
 
@@ -44,6 +45,7 @@ export default function AppLayout() {
     { label: 'Alerts', icon: <NotificationsActiveIcon />, to: '/alerts', badge: alertCount },
     { label: 'Reports', icon: <BarChartIcon />, to: '/reports' },
     ...(user.role === 'owner' ? [{ label: 'Settings', icon: <SettingsIcon />, to: '/settings' }] : []),
+    ...(user.role === 'owner' ? [{ label: 'Subscription', icon: <WorkspacePremiumIcon />, to: '/subscription' }] : []),
   ];
 
   const doLogout = async () => {

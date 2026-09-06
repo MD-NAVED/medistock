@@ -16,6 +16,7 @@ import Reports from './pages/Reports';
 import Settings from './pages/Settings';
 import Companies from './pages/Companies';
 import InvoiceView from './pages/InvoiceView';
+import Subscription from './pages/Subscription';
 
 export default function App() {
   return (
@@ -38,6 +39,7 @@ export default function App() {
                 <Route path="alerts" element={<Alerts />} />
                 <Route path="reports" element={<Reports />} />
                 <Route path="settings" element={<Settings />} />
+                <Route path="subscription" element={<Subscription />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Route>
             </Route>

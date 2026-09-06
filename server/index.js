@@ -1847,6 +1847,253 @@ app.post('/api/founder/tenants/:id/impersonate', requireAuth, requireOwner, asyn
 });
 
 // ---------------------------------------------------------------------------
+// Razorpay Billing Gateway — customers pay INSIDE the app (no personal UPI,
+// so they never suspect a scam). Checkout shows the business name; payment
+// success auto-activates the tenant subscription.
+// Config: RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET, RAZORPAY_WEBHOOK_SECRET
+// ---------------------------------------------------------------------------
+const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || '';
+const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || '';
+const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET || '';
+
+let razorpay = null;
+function getRazorpay() {
+  if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET) return null;
+  if (!razorpay) {
+    const Razorpay = require('razorpay');
+    razorpay = new Razorpay({ key_id: RAZORPAY_KEY_ID, key_secret: RAZORPAY_KEY_SECRET });
+  }
+  return razorpay;
+}
+
+// Public plan catalog (used by both the client paywall and the founder panel)
+const BILLING_PLANS = {
+  monthly: { label: 'Monthly Starter', amount: 59900, months: 1, price_per_month: 599.0, tagline: 'Full POS + WhatsApp bills' },
+  yearly: { label: 'Yearly Pro (Best Value)', amount: 499900, months: 12, price_per_month: 416.0, tagline: '2 months free + priority support' },
+  lifetime: { label: '3-Year Founder Pack', amount: 999900, months: 36, price_per_month: 277.0, tagline: '3 saal ka jhanjhat khatam' },
+};
+
+app.get('/api/billing/plans', (req, res) => {
+  res.json({
+    plans: Object.entries(BILLING_PLANS).map(([id, p]) => ({
+      id, label: p.label, amount: p.amount, months: p.months,
+      price_per_month: p.price_per_month, tagline: p.tagline,
+    })),
+    gateway: getRazorpay() ? 'razorpay' : 'not_configured',
+    key_id: RAZORPAY_KEY_ID || null,
+  });
+});
+
+// Payments ledger (one row per Razorpay attempt; updated by verify/webhook)
+async function ensureTenantPaymentsTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tenant_payments (
+      id SERIAL PRIMARY KEY,
+      tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      plan VARCHAR(50) NOT NULL,
+      months INTEGER NOT NULL,
+      amount INTEGER NOT NULL,
+      currency VARCHAR(10) NOT NULL DEFAULT 'INR',
+      razorpay_order_id TEXT,
+      razorpay_payment_id TEXT,
+      razorpay_signature TEXT,
+      status VARCHAR(50) NOT NULL DEFAULT 'created',
+      method VARCHAR(50) DEFAULT '',
+      paid_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+}
+ensureTenantPaymentsTable().catch(() => {});
+
+/** Mark a tenant paid: extend subscription from today (or from existing expiry
+    if still valid, so renewals stack) and flip status to active. */
+async function activateTenantSubscription(tenantId, months) {
+  const { rows } = await pool.query(
+    `UPDATE tenants t
+     SET status = 'active',
+         plan = CASE WHEN $2::int >= 12 THEN 'yearly' ELSE 'monthly' END,
+         price_per_month = $3,
+         subscription_ends_at = GREATEST(t.subscription_ends_at, now()) + make_interval(months => $2::int)
+     WHERE t.id = $1
+     RETURNING *`,
+    [tenantId, months, months >= 12 ? 416.0 : 599.0]
+  );
+  return rows[0] || null;
+}
+
+/** Shared success handler for verify() and the webhook. */
+async function handlePaymentSuccess(orderId, paymentId, signature, method) {
+  const pr = (await pool.query(
+    'SELECT * FROM tenant_payments WHERE razorpay_order_id = $1 ORDER BY id DESC LIMIT 1',
+    [orderId]
+  )).rows[0];
+  if (!pr) throw new Error('Unknown order: ' + orderId);
+
+  await pool.query(
+    `UPDATE tenant_payments
+     SET status = 'paid', razorpay_payment_id = $1, razorpay_signature = $2, method = $3, paid_at = now()
+     WHERE id = $4`,
+    [paymentId, signature || '', method || '', pr.id]
+  );
+
+  if (pr.status !== 'paid') {
+    // idempotent-ish: only extend the subscription the first time
+    await activateTenantSubscription(pr.tenant_id, pr.months);
+  }
+  return pr;
+}
+
+// Client POS app: create a Razorpay order for its own tenant renewal.
+// The client sends its plan choice; amount is enforced server-side so a
+// tampered request cannot buy a year for ₹1.
+app.post('/api/billing/create-order', requireAuth, async (req, res, next) => {
+  try {
+    const rp = getRazorpay();
+    if (!rp) return bad(res, 503, 'Payment gateway is not configured yet. Please contact support.');
+
+    const planId = String(req.body?.plan || 'yearly');
+    const plan = BILLING_PLANS[planId];
+    if (!plan) return bad(res, 400, 'Invalid plan');
+
+    // Which tenant does this logged-in user belong to? The POS owner's store
+    // is matched by username to the tenant's store phone (last 10 digits).
+    const uname = String(req.user.username || '');
+    const tenants = (await pool.query('SELECT id, store_name FROM tenants ORDER BY id')).rows;
+    const t = tenants.find((x) => uname.endsWith(String(x.id))) || tenants.find((x) => x.store_name === req.user.name) || null;
+
+    if (!t) return bad(res, 404, 'No store subscription is linked to this account. Ask your MediStock partner to link it.');
+
+    const order = await rp.orders.create({
+      amount: plan.amount,
+      currency: 'INR',
+      receipt: 'T' + t.id + '-' + planId + '-' + Date.now(),
+      notes: { tenant_id: String(t.id), plan: planId, store: t.store_name },
+    });
+
+    await pool.query(
+      `INSERT INTO tenant_payments (tenant_id, plan, months, amount, razorpay_order_id, status)
+       VALUES ($1, $2, $3, $4, $5, 'created')`,
+      [t.id, planId, plan.months, plan.amount, order.id]
+    );
+
+    res.json({
+      order_id: order.id,
+      amount: order.amount,
+      currency: order.currency,
+      key_id: RAZORPAY_KEY_ID,
+      plan: planId,
+      months: plan.months,
+      store_name: t.store_name,
+    });
+  } catch (e) { next(e); }
+});
+
+// Client POS app: verify checkout signature after payment and activate.
+app.post('/api/billing/verify', requireAuth, async (req, res, next) => {
+  try {
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body || {};
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+      return bad(res, 400, 'Missing payment confirmation fields');
+    }
+    const expected = crypto
+      .createHmac('sha256', RAZORPAY_KEY_SECRET)
+      .update(razorpay_order_id + '|' + razorpay_payment_id)
+      .digest('hex');
+    if (expected !== String(razorpay_signature)) {
+      return bad(res, 400, 'Payment signature verification failed');
+    }
+    const pr = await handlePaymentSuccess(razorpay_order_id, razorpay_payment_id, razorpay_signature, 'checkout');
+    const tenant = await activateTenantSubscription(pr.tenant_id, pr.months); // re-read fresh row
+    res.json({ ok: true, tenant });
+  } catch (e) { next(e); }
+});
+
+// Razorpay server-to-server webhook (signed with RAZORPAY_WEBHOOK_SECRET).
+// Backup for the verify call: if the user's browser died mid-checkout, the
+// webhook still activates the subscription.
+app.post('/api/billing/webhook', express.raw({ type: '*/*', limit: '1mb' }), async (req, res, next) => {
+  try {
+    if (!RAZORPAY_WEBHOOK_SECRET) return res.status(200).json({ ok: true, skipped: 'webhook secret not set' });
+    const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body || {}));
+    const sig = String(req.headers['x-razorpay-signature'] || '');
+    const expected = crypto.createHmac('sha256', RAZORPAY_WEBHOOK_SECRET).update(raw).digest('hex');
+    if (sig !== expected) return bad(res, 400, 'Invalid webhook signature');
+
+    const event = JSON.parse(raw.toString('utf8'));
+    if (event.event === 'payment.captured') {
+      const pay = event.payload?.payment?.entity || {};
+      const orderId = pay.order_id;
+      if (orderId) await handlePaymentSuccess(orderId, pay.id, '', pay.method || 'webhook');
+    }
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// Founder panel: create a hosted Razorpay Payment Link for a tenant and get a
+// ready WhatsApp share text. The customer pays on Razorpay's own page (UPI /
+// cards / netbanking) — no personal UPI ID is ever shown.
+app.post('/api/founder/tenants/:id/payment-link', requireAuth, requireOwner, async (req, res, next) => {
+  try {
+    const rp = getRazorpay();
+    if (!rp) return bad(res, 503, 'Payment gateway is not configured yet. Add RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET env vars.');
+
+    const id = asId(req.params.id);
+    const tenant = (await pool.query('SELECT * FROM tenants WHERE id = $1', [id])).rows[0];
+    if (!tenant) return bad(res, 404, 'Tenant not found');
+
+    const planId = String(req.body?.plan || 'yearly');
+    const plan = BILLING_PLANS[planId];
+    if (!plan) return bad(res, 400, 'Invalid plan');
+
+    const link = await rp.paymentLink.create({
+      amount: plan.amount,
+      currency: 'INR',
+      accept_partial: false,
+      reference_id: 'T' + tenant.id + '-' + planId + '-' + Date.now(),
+      description: 'MediStock ' + plan.label + ' — ' + tenant.store_name,
+      customer: {
+        name: tenant.owner_name,
+        contact: String(tenant.phone).replace(/[^\d]/g, '').slice(-10),
+        email: tenant.email || undefined,
+      },
+      notify: { sms: false, email: false },
+      notes: { tenant_id: String(tenant.id), plan: planId },
+    });
+
+    const shortUrl = link.short_url;
+    const cleanPhone = String(tenant.phone).replace(/[^\d]/g, '').slice(-10);
+    const waText = encodeURIComponent(
+      `🏥 *Namaste ${tenant.owner_name} Ji (${tenant.store_name})*\n\n` +
+      `Aapka MediStock subscription renew karein — 100% secure payment page:\n` +
+      `💳 *${plan.label}* — ₹${(plan.amount / 100).toLocaleString('en-IN')}\n\n` +
+      `👇 Yahan se pay karein (UPI / Card / NetBanking):\n${shortUrl}\n\n` +
+      `Payment hote hi aapka software turant ${plan.months} mahine ke liye activate ho jayega. Dhanyavaad!`
+    );
+
+    res.json({
+      payment_link: shortUrl,
+      whatsapp_link: `https://wa.me/91${cleanPhone}?text=${waText}`,
+      plan: planId,
+      amount: plan.amount,
+      razorpay_link_id: link.id,
+    });
+  } catch (e) { next(e); }
+});
+
+// Founder panel: recent payments ledger
+app.get('/api/founder/payments', requireAuth, requireOwner, async (req, res, next) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT p.*, t.store_name, t.owner_name, t.phone
+       FROM tenant_payments p JOIN tenants t ON t.id = p.tenant_id
+       ORDER BY p.id DESC LIMIT 100`
+    );
+    res.json(rows);
+  } catch (e) { next(e); }
+});
+
+// ---------------------------------------------------------------------------
 // Error handling
 // ---------------------------------------------------------------------------
 app.use((err, req, res, next) => {
