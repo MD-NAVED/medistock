@@ -90,13 +90,13 @@ export default function AppLayout() {
 
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh', bgcolor: 'background.default' }}>
-      <AppBar position="fixed" color="inherit" sx={{ zIndex: (t) => t.zIndex.drawer + 1, borderBottom: '1px solid #e0e6e4' }}>
+      <AppBar position="fixed" color="inherit" sx={{ width: '100%', left: 0, zIndex: (t) => t.zIndex.drawer + 1, borderBottom: '1px solid #e0e6e4' }}>
         <Toolbar>
           <IconButton edge="start" sx={{ mr: 1, display: { sm: 'none' } }} onClick={() => setMobileOpen(!mobileOpen)}>
             <MenuIcon />
           </IconButton>
           <LocalPharmacyIcon sx={{ display: { xs: 'none', sm: 'block' }, color: 'primary.main', mr: 1 }} />
-          <Typography variant="h6" sx={{ flexGrow: 1, fontSize: { xs: 16, sm: 20 }, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <Typography variant="h6" sx={{ flex: '1 1 0', minWidth: 0, mr: 1, fontSize: { xs: 16, sm: 20 }, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {storeName || 'MediStock'}
           </Typography>
           <Chip
@@ -133,7 +133,7 @@ export default function AppLayout() {
         {drawer}
       </Drawer>
 
-      <Box component="main" sx={{ flexGrow: 1, p: { xs: 2, md: 3 }, width: { sm: `calc(100% - ${DRAWER_WIDTH}px)` } }}>
+      <Box component="main" sx={{ flexGrow: 1, p: { xs: 2, md: 3 }, minWidth: 0, width: { sm: `calc(100% - ${DRAWER_WIDTH}px)` } }}>
         <Toolbar />
         <Outlet />
       </Box>

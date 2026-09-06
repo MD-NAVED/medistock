@@ -13,6 +13,18 @@ export function AuthProvider({ children }) {
     }
   });
 
+  // Keep the cached user fresh — the plan tier can change after a payment
+  // while the session token stays the same, so re-sync on every app load.
+  useEffect(() => {
+    if (!localStorage.getItem('medistock_token')) return;
+    api('/api/auth/me')
+      .then((u) => {
+        localStorage.setItem('medistock_user', JSON.stringify(u));
+        setUser(u);
+      })
+      .catch(() => { /* 401 handling lives inside api() */ });
+  }, []);
+
   // Founder impersonation: the admin panel opens the client app with
   // #impersonate_token=<session>. Swap it for a real logged-in session.
   useEffect(() => {

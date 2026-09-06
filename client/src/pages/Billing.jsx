@@ -296,11 +296,13 @@ export default function Billing() {
             onChange={(e) => setPhone(e.target.value.replace(/[^\d+ ]/g, ''))}
             placeholder="10-digit mobile — bill goes on WhatsApp"
             helperText="Send the bill on WhatsApp after checkout" />
-          <FormControlLabel
-            control={<Checkbox checked={udhaar} onChange={(e) => setUdhaar(e.target.checked)} size="small" />}
-            label={<Typography variant="body2">Record on Credit (Khata)</Typography>}
-            sx={{ mb: udhaar ? 1.5 : 2.5, display: 'flex' }}
-          />
+          {can('khata') && (
+            <FormControlLabel
+              control={<Checkbox checked={udhaar} onChange={(e) => setUdhaar(e.target.checked)} size="small" />}
+              label={<Typography variant="body2">Record on Credit (Khata)</Typography>}
+              sx={{ mb: udhaar ? 1.5 : 2.5, display: 'flex' }}
+            />
+          )}
           {udhaar && (
             <TextField
               size="small" fullWidth type="number" label="Credit Amount" value={udhaarAmt}
