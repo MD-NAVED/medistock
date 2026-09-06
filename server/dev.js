@@ -6,25 +6,25 @@ const path = require('path');
 // Load a .env file from the project root (KEY=VALUE lines) so local runs
 // don't need shell-specific env-var syntax. Must happen before ./index is
 // required because the database pool reads DATABASE_URL at load time.
-// Only the two known keys below are honoured — a stray .env can never inject
+// Only the known keys below are honoured — a stray .env can never inject
 // arbitrary environment entries.
+const ENV_KEYS = ['DATABASE_URL', 'DATABASE_POOL_MAX', 'RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET', 'RAZORPAY_WEBHOOK_SECRET'];
 function readDotEnv() {
-  const values = { DATABASE_URL: null, DATABASE_POOL_MAX: null };
+  const values = {};
+  ENV_KEYS.forEach((k) => { values[k] = null; });
   const envPath = path.join(__dirname, '..', '.env');
   if (!fs.existsSync(envPath)) return values;
   for (const line of fs.readFileSync(envPath, 'utf8').split(/\r?\n/)) {
     const t = line.trim();
-    if (t.startsWith('DATABASE_URL=')) values.DATABASE_URL = t.slice('DATABASE_URL='.length);
-    if (t.startsWith('DATABASE_POOL_MAX=')) values.DATABASE_POOL_MAX = t.slice('DATABASE_POOL_MAX='.length);
+    for (const k of ENV_KEYS) {
+      if (t.startsWith(k + '=')) values[k] = t.slice(k.length + 1);
+    }
   }
   return values;
 }
 const localEnv = readDotEnv();
-if (localEnv.DATABASE_URL && process.env.DATABASE_URL === undefined) {
-  process.env.DATABASE_URL = localEnv.DATABASE_URL;
-}
-if (localEnv.DATABASE_POOL_MAX && process.env.DATABASE_POOL_MAX === undefined) {
-  process.env.DATABASE_POOL_MAX = localEnv.DATABASE_POOL_MAX;
+for (const k of ENV_KEYS) {
+  if (localEnv[k] && process.env[k] === undefined) process.env[k] = localEnv[k];
 }
 
 const express = require('express');
