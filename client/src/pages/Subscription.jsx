@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Box, Typography, Paper, Button, Chip, Alert, Snackbar, CircularProgress,
-  Divider, Stack, Grid, ToggleButtonGroup, ToggleButton, useMediaQuery,
+  Divider, Stack, Grid, ToggleButtonGroup, ToggleButton, useMediaQuery, Collapse,
 } from '@mui/material';
 import WorkspacePremiumIcon from '@mui/icons-material/WorkspacePremium';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import BoltIcon from '@mui/icons-material/Bolt';
 import RocketLaunchIcon from '@mui/icons-material/RocketLaunch';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { api } from '../api';
 import { useAuth } from '../auth';
 
@@ -40,6 +41,18 @@ const FEATURE_ROWS = [
 
 const inr = (paise) => '₹' + (paise / 100).toLocaleString('en-IN');
 
+const TIER_ORDER = ['starter', 'pro', 'elite'];
+// Features a tier ADDS on top of the one below — the card only lists the new
+// stuff, everything from lower tiers is inherited and stated in one line.
+const addedFeatures = (tier) => {
+  const idx = TIER_ORDER.indexOf(tier);
+  const inherited = idx > 0
+    ? new Set(FEATURE_ROWS.filter((r) => r.tiers.includes(TIER_ORDER[idx - 1])).map((r) => r.label))
+    : new Set();
+  return FEATURE_ROWS.filter((r) => r.tiers.includes(tier) && !inherited.has(r.label));
+};
+const INHERITS_LINE = { pro: 'Everything in Starter, plus:', elite: 'Everything in Pro, plus:' };
+
 export default function Subscription() {
   const locked = new URLSearchParams(window.location.search).get('locked') === '1';
   const { user } = useAuth();
@@ -47,6 +60,7 @@ export default function Subscription() {
   const [plans, setPlans] = useState([]);
   const [gateway, setGateway] = useState('not_configured');
   const [selectedPlan, setSelectedPlan] = useState('pro-yearly');
+  const [expanded, setExpanded] = useState({});
   const [loading, setLoading] = useState(true);
   const [paying, setPaying] = useState(false);
   const [snack, setSnack] = useState(null);
@@ -184,12 +198,12 @@ export default function Subscription() {
           const shown = selectedPlan?.endsWith('-monthly') ? monthly : yearly;
           const isCurrent = currentTier === tier && !locked;
           const isPro = tier === 'pro';
+          const open = !!expanded[tier];
           return (
             <Grid item xs={12} sm={4} key={tier}>
               <Paper
-                onClick={() => shown && setSelectedPlan(shown.id)}
                 sx={{
-                  p: 2.5, height: '100%', cursor: 'pointer', position: 'relative',
+                  p: 2.5, height: '100%', position: 'relative',
                   border: selectedPlan === shown?.id ? '2px solid #0b695c' : '1px solid #e0e6e4',
                   ...(isPro && selectedPlan !== shown?.id ? { borderColor: '#0b695c', borderWidth: 1 } : {}),
                 }}
@@ -198,28 +212,53 @@ export default function Subscription() {
                   <Chip size="small" color="success" icon={<BoltIcon />} label="Most Popular"
                     sx={{ position: 'absolute', top: -12, left: '50%', transform: 'translateX(-50%)' }} />
                 )}
-                <Typography sx={{ fontWeight: 800, fontSize: 20, textTransform: 'uppercase', letterSpacing: 1 }}>{TIER_INFO[tier].name}</Typography>
-                <Typography variant="caption" color="text.secondary">{TIER_INFO[tier].blurb}</Typography>
-                <Typography sx={{ fontWeight: 800, fontSize: 28, mt: 1 }}>
-                  {shown ? inr(shown.amount) : '—'}
-                  <Typography component="span" variant="caption" color="text.secondary"> /{selectedPlan?.endsWith('-monthly') ? 'month' : 'year'}</Typography>
-                </Typography>
-                {shown && (
-                  <Typography variant="caption" color="text.secondary">
-                    ≈ ₹{shown.price_per_month}/month
-                  </Typography>
-                )}
-                {isCurrent && <Chip size="small" sx={{ ml: 1 }} label="Your plan" color="primary" variant="outlined" />}
+                <Box
+                  onClick={() => {
+                    if (shown) setSelectedPlan(shown.id);
+                    setExpanded((e) => ({ ...e, [tier]: !e[tier] }));
+                  }}
+                  sx={{ cursor: 'pointer' }}
+                >
+                  <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
+                    <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                      <Typography sx={{ fontWeight: 800, fontSize: 20, textTransform: 'uppercase', letterSpacing: 1 }}>{TIER_INFO[tier].name}</Typography>
+                      <Typography variant="caption" color="text.secondary">{TIER_INFO[tier].blurb}</Typography>
+                    </Box>
+                    <ExpandMoreIcon
+                      color="primary"
+                      sx={{ mt: 0.5, transition: 'transform 0.2s', transform: open ? 'rotate(180deg)' : 'none' }}
+                    />
+                  </Box>
+                  <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1, mt: 1 }}>
+                    <Typography sx={{ fontWeight: 800, fontSize: 28 }}>
+                      {shown ? inr(shown.amount) : '—'}
+                      <Typography component="span" variant="caption" color="text.secondary"> /{selectedPlan?.endsWith('-monthly') ? 'month' : 'year'}</Typography>
+                    </Typography>
+                    {isCurrent && <Chip size="small" label="Your plan" color="primary" variant="outlined" />}
+                  </Box>
+                  {shown && (
+                    <Typography variant="caption" color="text.secondary">
+                      ≈ ₹{shown.price_per_month}/month · tap to {open ? 'hide' : 'show'} features
+                    </Typography>
+                  )}
+                </Box>
 
-                <Divider sx={{ my: 1.5 }} />
-                <Stack spacing={0.75}>
-                  {FEATURE_ROWS.filter((row) => row.tiers.includes(tier)).map((row) => (
-                    <Stack key={row.label} direction="row" spacing={1} alignItems="center">
-                      <CheckCircleIcon sx={{ fontSize: 17, color: 'success.main' }} />
-                      <Typography variant="caption">{row.label}</Typography>
-                    </Stack>
-                  ))}
-                </Stack>
+                <Collapse in={open}>
+                  <Divider sx={{ my: 1.5 }} />
+                  {INHERITS_LINE[tier] && (
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.75 }}>
+                      {INHERITS_LINE[tier]}
+                    </Typography>
+                  )}
+                  <Stack spacing={0.75}>
+                    {addedFeatures(tier).map((row) => (
+                      <Stack key={row.label} direction="row" spacing={1} alignItems="center">
+                        <CheckCircleIcon sx={{ fontSize: 17, color: 'success.main' }} />
+                        <Typography variant="caption">{row.label}</Typography>
+                      </Stack>
+                    ))}
+                  </Stack>
+                </Collapse>
               </Paper>
             </Grid>
           );
