@@ -9,7 +9,11 @@ import ReceiptLongIcon from '@mui/icons-material/ReceiptLong';
 import InventoryIcon from '@mui/icons-material/Inventory2';
 import SearchIcon from '@mui/icons-material/Search';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import LockIcon from '@mui/icons-material/Lock';
 import { api } from '../api';
+import { useAuth } from '../auth';
+import { tierAllows, userTier } from '../tiers';
+import { useNavigate } from 'react-router-dom';
 import BillDetailDialog, { statusChip } from '../components/BillDetailDialog';
 import { fmt, fmtDateTime, daysAgoStr, todayStr } from '../utils';
 
@@ -44,6 +48,26 @@ export default function Reports() {
 
   useEffect(load, [applied]);
   useEffect(() => { api('/api/settings').then(setSettings).catch(() => {}); }, []);
+
+  const { user } = useAuth();
+  const navigate = useNavigate();
+  // Full reports are a Pro feature — the dashboard keeps its basic numbers for
+  // every tier, so Starter stores still see today's position there.
+  if (!tierAllows(userTier(user), 'reports')) {
+    return (
+      <Box>
+        <Typography variant="h5" sx={{ mb: { xs: 2, md: 3 }, fontSize: { xs: 20, md: 24 } }}>Reports</Typography>
+        <Paper sx={{ p: { xs: 4, md: 6 }, textAlign: 'center' }}>
+          <LockIcon sx={{ fontSize: 46, color: 'warning.main', mb: 1 }} />
+          <Typography sx={{ fontWeight: 700, fontSize: 18 }}>Reports are a Pro feature</Typography>
+          <Typography color="text.secondary" sx={{ mt: 1, mb: 2.5 }}>
+            Upgrade to Pro for full sales &amp; purchase reports. Your data keeps recording in the meantime.
+          </Typography>
+          <Button variant="contained" onClick={() => navigate('/subscription')}>View Plans</Button>
+        </Paper>
+      </Box>
+    );
+  }
 
   return (
     <Box>

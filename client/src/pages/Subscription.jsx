@@ -1,26 +1,52 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Box, Typography, Paper, Button, Chip, Alert, Snackbar, CircularProgress,
-  Divider, Stack, Radio, RadioGroup, FormControlLabel, FormControl,
+  Divider, Stack, Grid, ToggleButtonGroup, ToggleButton,
 } from '@mui/material';
 import WorkspacePremiumIcon from '@mui/icons-material/WorkspacePremium';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import CloseIcon from '@mui/icons-material/Close';
 import BoltIcon from '@mui/icons-material/Bolt';
+import RocketLaunchIcon from '@mui/icons-material/RocketLaunch';
 import { api } from '../api';
-import { fmtDate } from '../utils';
+import { useAuth } from '../auth';
 
 /**
- * In-app subscription renewal — the pharmacy owner pays through Razorpay's
- * trusted checkout (UPI / cards / netbanking) instead of a personal UPI ID,
- * so there is never a "yeh scammer to nahi?" doubt. Payment success activates
- * the subscription instantly (server verifies the signature).
+ * In-app subscription renewal with the 3-tier pricing ladder
+ * (Starter / Pro / Elite × monthly / yearly, plus the 3-year Founder Pack).
+ * The pharmacy owner pays through Razorpay's trusted checkout (UPI / cards /
+ * netbanking) — never a personal UPI ID — and the store unlocks the moment
+ * the server verifies the signature.
  */
+
+const TIER_INFO = {
+  starter: { name: 'Starter', blurb: 'Everything you need to run the counter.' },
+  pro: { name: 'Pro', blurb: 'Save time — Khata, WhatsApp bills, full reports.' },
+  elite: { name: 'Elite', blurb: 'Full power — scanner + daily WhatsApp summary.' },
+};
+
+const FEATURE_ROWS = [
+  { label: 'Billing & GST invoices', tiers: ['starter', 'pro', 'elite'] },
+  { label: 'Medicines, stock & expiry alerts', tiers: ['starter', 'pro', 'elite'] },
+  { label: 'Purchases & dashboard', tiers: ['starter', 'pro', 'elite'] },
+  { label: '2 staff accounts', tiers: ['starter', 'pro', 'elite'] },
+  { label: 'Unlimited staff accounts', tiers: ['pro', 'elite'] },
+  { label: 'Khata (Udhaar Book)', tiers: ['pro', 'elite'] },
+  { label: 'WhatsApp bill sending', tiers: ['pro', 'elite'] },
+  { label: 'Excel/CSV data import', tiers: ['pro', 'elite'] },
+  { label: 'Full sales & purchase reports', tiers: ['pro', 'elite'] },
+  { label: 'Camera invoice scanner', tiers: ['elite'] },
+  { label: 'WhatsApp daily business summary', tiers: ['elite'] },
+];
+
+const inr = (paise) => '₹' + (paise / 100).toLocaleString('en-IN');
 
 export default function Subscription() {
   const locked = new URLSearchParams(window.location.search).get('locked') === '1';
+  const { user } = useAuth();
   const [plans, setPlans] = useState([]);
   const [gateway, setGateway] = useState('not_configured');
-  const [selected, setSelected] = useState('yearly');
+  const [selectedPlan, setSelectedPlan] = useState('pro-yearly');
   const [loading, setLoading] = useState(true);
   const [paying, setPaying] = useState(false);
   const [snack, setSnack] = useState(null);
@@ -48,6 +74,16 @@ export default function Subscription() {
     document.body.appendChild(s);
   }, []);
 
+  const planFor = (tier, months) => plans.find((p) => p.tier === tier && p.months === months);
+  const founderPack = plans.find((p) => p.id === 'elite-3yr');
+  const selected = plans.find((p) => p.id === selectedPlan);
+
+  const setTierCycle = (tier, months) => {
+    const p = planFor(tier, months);
+    if (p) setSelectedPlan(p.id);
+  };
+  const currentTier = ['starter', 'pro', 'elite'].includes(user?.tier) ? user.tier : 'starter';
+
   const payNow = async () => {
     setPaying(true);
     try {
@@ -58,7 +94,7 @@ export default function Subscription() {
         });
         return;
       }
-      const order = await api('/api/billing/create-order', { method: 'POST', body: { plan: selected } });
+      const order = await api('/api/billing/create-order', { method: 'POST', body: { plan: selectedPlan } });
 
       const rzp = new window.Razorpay({
         key: order.key_id,
@@ -96,7 +132,7 @@ export default function Subscription() {
   }
 
   return (
-    <Box sx={{ maxWidth: 760, mx: 'auto' }}>
+    <Box sx={{ maxWidth: 980, mx: 'auto' }}>
       {locked && (
         <Alert severity="error" sx={{ mb: 2 }}>
           Your trial or subscription has ended — your store is locked.
@@ -106,10 +142,11 @@ export default function Subscription() {
       <Paper sx={{ p: { xs: 2.5, md: 4 }, textAlign: 'center', mb: 3, background: 'linear-gradient(135deg,#0b695c 0%,#0d8a75 100%)', color: '#fff' }}>
         <WorkspacePremiumIcon sx={{ fontSize: 48, mb: 1 }} />
         <Typography variant="h5" sx={{ fontWeight: 700 }}>
-          MediStock Subscription Renew
+          MediStock Subscription
         </Typography>
         <Typography sx={{ mt: 0.5, opacity: 0.9, fontSize: 14 }}>
           Secure payment by Razorpay — UPI, Debit/Credit Card and NetBanking are all accepted.
+          Your current plan: <strong style={{ textTransform: 'capitalize' }}>{currentTier}</strong>
         </Typography>
       </Paper>
 
@@ -119,54 +156,112 @@ export default function Subscription() {
         </Alert>
       )}
 
-      <FormControl component="div" fullWidth>
-        <RadioGroup value={selected} onChange={(e) => setSelected(e.target.value)}>
-          <Stack spacing={2}>
-            {plans.map((p) => (
+      <Stack alignItems="center" sx={{ mb: 3 }}>
+        <ToggleButtonGroup
+          size="small"
+          exclusive
+          value={selectedPlan?.endsWith('-monthly') ? 'monthly' : selectedPlan === 'elite-3yr' ? 'founder' : 'yearly'}
+          onChange={(e, v) => {
+            if (v === 'founder' && founderPack) { setSelectedPlan('elite-3yr'); return; }
+            if (v === 'monthly' || v === 'yearly') {
+              const tier = selected?.tier || 'pro';
+              setTierCycle(tier, v === 'monthly' ? 1 : 12);
+            }
+          }}
+        >
+          <ToggleButton value="monthly">Monthly</ToggleButton>
+          <ToggleButton value="yearly">Yearly&nbsp;<strong style={{ color: '#0b695c' }}>(save 2 months)</strong></ToggleButton>
+          <ToggleButton value="founder">3-Year Founder Pack</ToggleButton>
+        </ToggleButtonGroup>
+      </Stack>
+
+      <Grid container spacing={2}>
+        {['starter', 'pro', 'elite'].map((tier) => {
+          const monthly = planFor(tier, 1);
+          const yearly = planFor(tier, 12);
+          const shown = selectedPlan?.endsWith('-monthly') ? monthly : yearly;
+          const isCurrent = currentTier === tier && !locked;
+          const isPro = tier === 'pro';
+          return (
+            <Grid item xs={12} sm={4} key={tier}>
               <Paper
-                key={p.id}
-                onClick={() => setSelected(p.id)}
+                onClick={() => shown && setSelectedPlan(shown.id)}
                 sx={{
-                  p: 2.5, cursor: 'pointer',
-                  border: selected === p.id ? '2px solid #0b695c' : '1px solid #e0e6e4',
-                  display: 'flex', alignItems: 'center', gap: 2,
+                  p: 2.5, height: '100%', cursor: 'pointer', position: 'relative',
+                  border: selectedPlan === shown?.id ? '2px solid #0b695c' : '1px solid #e0e6e4',
+                  ...(isPro && selectedPlan !== shown?.id ? { borderColor: '#0b695c', borderWidth: 1 } : {}),
                 }}
               >
-                <Radio checked={selected === p.id} />
-                <Box sx={{ flexGrow: 1 }}>
-                  <Stack direction="row" spacing={1} alignItems="center">
-                    <Typography sx={{ fontWeight: 700 }}>{p.label}</Typography>
-                    {p.id === 'yearly' && <Chip size="small" color="success" icon={<BoltIcon />} label="Best Value" />}
-                  </Stack>
+                {isPro && (
+                  <Chip size="small" color="success" icon={<BoltIcon />} label="Most Popular"
+                    sx={{ position: 'absolute', top: -12, left: '50%', transform: 'translateX(-50%)' }} />
+                )}
+                <Typography sx={{ fontWeight: 800, fontSize: 20, textTransform: 'uppercase', letterSpacing: 1 }}>{TIER_INFO[tier].name}</Typography>
+                <Typography variant="caption" color="text.secondary">{TIER_INFO[tier].blurb}</Typography>
+                <Typography sx={{ fontWeight: 800, fontSize: 28, mt: 1 }}>
+                  {shown ? inr(shown.amount) : '—'}
+                  <Typography component="span" variant="caption" color="text.secondary"> /{selectedPlan?.endsWith('-monthly') ? 'month' : 'year'}</Typography>
+                </Typography>
+                {shown && (
                   <Typography variant="caption" color="text.secondary">
-                    {p.tagline} • ₹{p.price_per_month}/month equivalent
+                    ≈ ₹{shown.price_per_month}/month
                   </Typography>
-                </Box>
-                <Box sx={{ textAlign: 'right' }}>
-                  <Typography sx={{ fontWeight: 800, fontSize: 20 }}>
-                    ₹{(p.amount / 100).toLocaleString('en-IN')}
-                  </Typography>
-                  <Typography variant="caption" color="text.secondary">
-                    {p.months} month{p.months > 1 ? 's' : ''}
-                  </Typography>
-                </Box>
+                )}
+                {isCurrent && <Chip size="small" sx={{ ml: 1 }} label="Your plan" color="primary" variant="outlined" />}
+
+                <Divider sx={{ my: 1.5 }} />
+                <Stack spacing={0.75}>
+                  {FEATURE_ROWS.map((row) => {
+                    const has = row.tiers.includes(tier);
+                    return (
+                      <Stack key={row.label} direction="row" spacing={1} alignItems="center">
+                        {has
+                          ? <CheckCircleIcon sx={{ fontSize: 17, color: 'success.main' }} />
+                          : <CloseIcon sx={{ fontSize: 15, color: 'text.disabled' }} />}
+                        <Typography variant="caption" sx={{ color: has ? 'text.primary' : 'text.disabled' }}>
+                          {row.label}
+                        </Typography>
+                      </Stack>
+                    );
+                  })}
+                </Stack>
               </Paper>
-            ))}
-          </Stack>
-        </RadioGroup>
-      </FormControl>
+            </Grid>
+          );
+        })}
+      </Grid>
+
+      {founderPack && (
+        <Paper
+          onClick={() => setSelectedPlan('elite-3yr')}
+          sx={{
+            mt: 3, p: 2.5, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap',
+            border: selectedPlan === 'elite-3yr' ? '2px solid #0b695c' : '1px dashed #0b695c',
+          }}
+        >
+          <RocketLaunchIcon sx={{ color: '#0b695c', fontSize: 34 }} />
+          <Box sx={{ flexGrow: 1 }}>
+            <Stack direction="row" spacing={1} alignItems="center">
+              <Typography sx={{ fontWeight: 800 }}>{founderPack.label}</Typography>
+              <Chip size="small" color="warning" label="Launch Offer" />
+            </Stack>
+            <Typography variant="caption" color="text.secondary">{founderPack.tagline} — ≈ ₹{founderPack.price_per_month}/month</Typography>
+          </Box>
+          <Typography sx={{ fontWeight: 800, fontSize: 24 }}>{inr(founderPack.amount)}</Typography>
+        </Paper>
+      )}
 
       <Button
         fullWidth size="large" variant="contained" onClick={payNow}
-        disabled={paying || gateway !== 'razorpay'}
+        disabled={paying || gateway !== 'razorpay' || !selected}
         sx={{ mt: 3, py: 1.6, fontWeight: 700, fontSize: 16 }}
       >
-        {paying ? 'Opening secure checkout…' : '🔒 Pay Securely with Razorpay'}
+        {paying ? 'Opening secure checkout…' : `🔒 Continue with ${selected?.label || 'Pro'} — ${selected ? inr(selected.amount) : ''}`}
       </Button>
 
       <Divider sx={{ my: 3 }} />
       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} justifyContent="center">
-        {['PCI-DSS Secure Checkout', 'Auto activation on payment', 'Data stays in cloud backup'].map((t) => (
+        {['PCI-DSS Secure Checkout', 'Auto activation on payment', 'Data stays in cloud backup', 'Upgrade or downgrade anytime'].map((t) => (
           <Chip key={t} size="small" icon={<CheckCircleIcon />} label={t} variant="outlined" />
         ))}
       </Stack>

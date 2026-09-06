@@ -12,8 +12,10 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import LockResetIcon from '@mui/icons-material/LockReset';
 import KeyIcon from '@mui/icons-material/Key';
 import CloudDoneIcon from '@mui/icons-material/CloudDone';
+import LockIcon from '@mui/icons-material/Lock';
 import { api } from '../api';
 import { useAuth } from '../auth';
+import { tierAllows, userTier } from '../tiers';
 import { fmtDateTime } from '../utils';
 import ImportData from '../components/ImportData';
 
@@ -198,7 +200,16 @@ export default function Settings() {
         </Paper>
       )}
 
-      {tab === 3 && <ImportData />}
+      {tab === 3 && (tierAllows(userTier(user), 'import') ? <ImportData /> : (
+        <Paper sx={{ p: { xs: 4, md: 6 }, textAlign: 'center' }}>
+          <LockIcon sx={{ fontSize: 46, color: 'warning.main', mb: 1 }} />
+          <Typography sx={{ fontWeight: 700, fontSize: 18 }}>Excel/CSV import is a Pro feature</Typography>
+          <Typography color="text.secondary" sx={{ mt: 1, mb: 2.5 }}>
+            Upgrade to Pro to bring your existing Marg/Excel data in minutes.
+          </Typography>
+          <Button variant="contained" onClick={() => window.location.assign('/subscription')}>View Plans</Button>
+        </Paper>
+      ))}
 
       {tab === 2 && (
         <Box sx={{ display: 'grid', gap: 3, maxWidth: 720 }}>

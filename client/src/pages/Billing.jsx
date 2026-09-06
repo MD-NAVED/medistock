@@ -39,6 +39,9 @@ function buildWhatsAppLink(invoice, storeName) {
   return 'https://wa.me/' + to + '?text=' + encodeURIComponent(lines.join('\n'));
 }
 import MedicineLogo from '../components/MedicineLogo';
+import { useAuth } from '../auth';
+import { tierAllows, userTier } from '../tiers';
+import UpgradeDialog from '../components/UpgradeDialog';
 
 export default function Billing() {
   const isMobile = useMediaQuery('(max-width:900px)');
@@ -54,6 +57,9 @@ export default function Billing() {
   const [busy, setBusy] = useState(false);
   const [snack, setSnack] = useState(null);
   const [invoice, setInvoice] = useState(null); // {sale, items} after success
+  const { user } = useAuth();
+  const [upgrade, setUpgrade] = useState(null);
+  const can = (f) => tierAllows(userTier(user), f);
 
   const loadMedicines = () => api('/api/medicines').then(setMedicines).catch(() => {});
   useEffect(() => {
@@ -358,8 +364,10 @@ export default function Billing() {
                 <Button
                   variant="contained" color="success"
                   startIcon={<WhatsAppIcon />}
-                  href={buildWhatsAppLink(invoice, settings?.store_name || 'MediStock Pharmacy')}
-                  target="_blank" rel="noopener noreferrer"
+                  onClick={() => {
+                    if (!can('whatsapp_bill')) { setUpgrade({ feature: 'whatsapp_bill', requiredTier: 'pro' }); return; }
+                    window.open(buildWhatsAppLink(invoice, settings?.store_name || 'MediStock Pharmacy'), '_blank', 'noopener');
+                  }}
                 >
                   Send on WhatsApp
                 </Button>
@@ -369,6 +377,7 @@ export default function Billing() {
         )}
       </Dialog>
 
+      <UpgradeDialog open={!!upgrade} onClose={() => setUpgrade(null)} feature={upgrade?.feature} requiredTier={upgrade?.requiredTier} />
       <Snackbar open={!!snack} autoHideDuration={4500} onClose={() => setSnack(null)} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>
         {snack && <Alert severity={snack.severity} onClose={() => setSnack(null)} sx={{ width: '100%' }}>{snack.message}</Alert>}
       </Snackbar>

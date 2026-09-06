@@ -15,6 +15,8 @@ import PhotoCameraIcon from '@mui/icons-material/PhotoCamera';
 import DocumentScannerIcon from '@mui/icons-material/DocumentScanner';
 import { api } from '../api';
 import { useAuth } from '../auth';
+import { tierAllows, userTier } from '../tiers';
+import UpgradeDialog from '../components/UpgradeDialog';
 import { fmt, fmtDate, fmtDateTime, todayStr } from '../utils';
 import { parseInvoiceImage } from '../utils/invoiceParser';
 
@@ -80,8 +82,15 @@ export default function Purchases() {
   const [scanStatus, setScanStatus] = useState('');
   const [scannedNotice, setScannedNotice] = useState(false);
   const fileInputRef = useRef(null);
+  const [upgrade, setUpgrade] = useState(null);
+  const can = (f) => tierAllows(userTier(user), f);
 
   const handleScanInvoice = async (e) => {
+    if (!can('scanner')) {
+      setUpgrade({ feature: 'scanner', requiredTier: 'elite' });
+      if (e.target) e.target.value = '';
+      return;
+    }
     const file = e.target.files && e.target.files[0];
     if (!file) return;
 
@@ -682,6 +691,7 @@ export default function Purchases() {
         </DialogActions>
       </Dialog>
 
+      <UpgradeDialog open={!!upgrade} onClose={() => setUpgrade(null)} feature={upgrade?.feature} requiredTier={upgrade?.requiredTier} />
       <Snackbar open={!!snack} autoHideDuration={4500} onClose={() => setSnack(null)} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>
         {snack && <Alert severity={snack.severity} onClose={() => setSnack(null)} sx={{ width: '100%' }}>{snack.message}</Alert>}
       </Snackbar>

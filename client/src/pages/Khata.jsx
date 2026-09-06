@@ -10,6 +10,9 @@ import PostAddIcon from '@mui/icons-material/PostAdd';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
 import { api } from '../api';
 import { fmt, fmtDate, fmtDateTime } from '../utils';
+import { useAuth } from '../auth';
+import { tierAllows, userTier, FEATURE_MIN_TIER } from '../tiers';
+import UpgradeDialog from '../components/UpgradeDialog';
 
 const KINDS = [
   { value: 'credit', label: 'Credit Given' },
@@ -35,6 +38,11 @@ export default function Khata() {
   // Add-entry dialog: { customer_id, kind, amount, note } — customer_id null = ask name
   const [entry, setEntry] = useState(null);
   const [busy, setBusy] = useState(false);
+  const { user } = useAuth();
+  const [upgrade, setUpgrade] = useState(null);
+  const can = (f) => tierAllows(userTier(user), f);
+  const askUpgrade = (f) => setUpgrade({ feature: f, requiredTier: FEATURE_MIN_TIER[f] });
+  const gate = (f, fn) => () => (can(f) ? fn() : askUpgrade(f));
 
   const load = () => api('/api/khata').then(setRows).catch((e) => setError(e.message));
   useEffect(() => { load(); }, []);
@@ -51,7 +59,8 @@ export default function Khata() {
       setSnack({ severity: 'success', message: 'Customer added to Credit Book' });
       load();
     } catch (e) {
-      setSnack({ severity: 'error', message: e.message });
+      if (e.code === 'feature_locked') { setNewCust(null); setUpgrade({ feature: e.feature, requiredTier: e.required_tier }); }
+      else setSnack({ severity: 'error', message: e.message });
     } finally { setBusy(false); }
   };
 
@@ -71,7 +80,8 @@ export default function Khata() {
       load();
       if (detail) openDetail(detail.id);
     } catch (e) {
-      setSnack({ severity: 'error', message: e.message });
+      if (e.code === 'feature_locked') { setEntry(null); setUpgrade({ feature: e.feature, requiredTier: e.required_tier }); }
+      else setSnack({ severity: 'error', message: e.message });
     } finally { setBusy(false); }
   };
 
@@ -85,7 +95,7 @@ export default function Khata() {
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1.5, mb: 3 }}>
         <Typography variant="h5">Credit Book (Khata)</Typography>
-        <Button variant="contained" startIcon={<PersonAddAlt1Icon />} onClick={() => setNewCust({ name: '', phone: '' })}>
+        <Button variant="contained" startIcon={<PersonAddAlt1Icon />} onClick={gate('khata', () => setNewCust({ name: '', phone: '' }))}>
           New Customer
         </Button>
       </Box>
@@ -139,7 +149,7 @@ export default function Khata() {
                   <IconButton size="small" color="primary" onClick={() => openDetail(r.id)} aria-label={'History ' + r.name}>
                     <HistoryIcon fontSize="small" />
                   </IconButton>
-                  <IconButton size="small" color="success" onClick={() => setEntry({ customerId: r.id, name: r.name, kind: 'payment', amount: '', note: '' })} aria-label={'Add entry ' + r.name}>
+                  <IconButton size="small" color="success" onClick={gate('khata', () => setEntry({ customerId: r.id, name: r.name, kind: 'payment', amount: '', note: '' }))} aria-label={'Add entry ' + r.name}>
                     <PostAddIcon fontSize="small" />
                   </IconButton>
                 </TableCell>
@@ -180,11 +190,11 @@ export default function Khata() {
                 <Typography variant="caption" color="text.secondary">pending balance</Typography>
                 <Box sx={{ flexGrow: 1 }} />
                 <Button size="small" variant="outlined" color="success"
-                  onClick={() => setEntry({ customerId: detail.id, name: detail.name, kind: 'payment', amount: Math.max(0, detail.balance).toFixed(2), note: '' })}>
+                  onClick={gate('khata', () => setEntry({ customerId: detail.id, name: detail.name, kind: 'payment', amount: Math.max(0, detail.balance).toFixed(2), note: '' }))}>
                   Payment Received
                 </Button>
                 <Button size="small" variant="outlined" color="error"
-                  onClick={() => setEntry({ customerId: detail.id, name: detail.name, kind: 'credit', amount: '', note: '' })}>
+                  onClick={gate('khata', () => setEntry({ customerId: detail.id, name: detail.name, kind: 'credit', amount: '', note: '' }))}>
                   Credit Given
                 </Button>
               </Box>
@@ -256,6 +266,8 @@ export default function Khata() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      <UpgradeDialog open={!!upgrade} onClose={() => setUpgrade(null)} feature={upgrade?.feature} requiredTier={upgrade?.requiredTier} />
 
       <Snackbar open={!!snack} autoHideDuration={4500} onClose={() => setSnack(null)} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>
         {snack && <Alert severity={snack.severity} onClose={() => setSnack(null)} sx={{ width: '100%' }}>{snack.message}</Alert>}

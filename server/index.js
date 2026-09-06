@@ -124,6 +124,7 @@ function ensureSchema() {
           license_number VARCHAR(100) DEFAULT '',
           plan VARCHAR(50) NOT NULL DEFAULT 'trial',
           status VARCHAR(50) NOT NULL DEFAULT 'trial',
+          tier VARCHAR(20) NOT NULL DEFAULT 'starter',
           price_per_month NUMERIC(10, 2) NOT NULL DEFAULT 999.00,
           trial_ends_at TIMESTAMPTZ NOT NULL DEFAULT (CURRENT_TIMESTAMP + interval '30 days'),
           subscription_ends_at TIMESTAMPTZ,
@@ -182,6 +183,14 @@ function ensureSchema() {
         // The original owners operate the SaaS platform itself.
         await pool.query("UPDATE users SET platform_admin = 1 WHERE role = 'owner' AND store_id = $1", [tid]);
       }
+
+      // Feature-tier pricing ladder (Starter / Pro / Elite). Backfill: active
+      // trials get Elite (the trial is the full experience), paid legacy plans
+      // map to their closest tier.
+      await pool.query("ALTER TABLE tenants ADD COLUMN IF NOT EXISTS tier VARCHAR(20) NOT NULL DEFAULT 'starter'");
+      await pool.query("UPDATE tenants SET tier = 'elite' WHERE plan = 'lifetime' AND tier = 'starter'");
+      await pool.query("UPDATE tenants SET tier = 'pro' WHERE plan IN ('monthly', 'yearly') AND tier = 'starter'");
+      await pool.query("UPDATE tenants SET tier = 'elite' WHERE status = 'trial' AND tier = 'starter'");
     })().catch((e) => { schemaReadyPromise = null; throw e; });
   }
   return schemaReadyPromise;
@@ -196,7 +205,7 @@ function requireAuth(req, res, next) {
     const token = h.startsWith('Bearer ') ? h.slice(7) : null;
     if (!token) return res.status(401).json({ error: 'Not logged in', code: 'session_invalid' });
     return pool.query(
-      "SELECT s.token, u.id, u.username, u.name, u.role, u.active, u.store_id, u.platform_admin, t.status AS tenant_status, t.trial_ends_at, t.subscription_ends_at FROM sessions s JOIN users u ON u.id = s.user_id LEFT JOIN tenants t ON t.id = u.store_id WHERE s.token = $1 AND s.expires_at > now()",
+      "SELECT s.token, u.id, u.username, u.name, u.role, u.active, u.store_id, u.platform_admin, t.status AS tenant_status, t.tier AS tenant_tier, t.trial_ends_at, t.subscription_ends_at FROM sessions s JOIN users u ON u.id = s.user_id LEFT JOIN tenants t ON t.id = u.store_id WHERE s.token = $1 AND s.expires_at > now()",
       [token]
     ).then(({ rows }) => {
       const row = rows[0];
@@ -208,6 +217,8 @@ function requireAuth(req, res, next) {
                    storeId: row.store_id, platformAdmin: row.platform_admin === 1 };
       req.storeId = row.store_id;
       req.token = token;
+      // Feature tier for plan gating — the platform admin sees everything.
+      req.tier = row.platform_admin === 1 ? 'elite' : (row.tenant_tier || 'starter');
       // Kill-switch & trial enforcement: a suspended/expired store stops
       // working everywhere EXCEPT auth and billing, so the paywall itself
       // stays reachable and a renewal can unlock the store again.
@@ -238,6 +249,36 @@ function requireOwner(req, res, next) {
 function requirePlatformAdmin(req, res, next) {
   if (!req.user || !req.user.platformAdmin) return res.status(403).json({ error: 'Platform admin only' });
   next();
+}
+
+// ---------------------------------------------------------------------------
+// Feature tiers (the pricing ladder). Gating lives HERE on the server — hiding
+// a button in the app UI is only cosmetic and is never the security boundary.
+// ---------------------------------------------------------------------------
+const TIER_RANK = { starter: 0, pro: 1, elite: 2 };
+const FEATURE_MIN_TIER = {
+  khata: 'pro',             // udhaar book writes (reads stay open for everyone)
+  whatsapp_bill: 'pro',     // WhatsApp bill sharing after checkout
+  import: 'pro',            // Excel/CSV import wizard
+  reports: 'pro',           // full sales/purchase reports
+  staff_unlimited: 'pro',   // Starter is capped at 3 accounts (owner + 2 staff)
+  scanner: 'elite',         // camera invoice scanner
+  whatsapp_summary: 'elite' // daily WhatsApp business summary
+};
+function tierAllows(tier, feature) {
+  const need = FEATURE_MIN_TIER[feature];
+  if (!need) return true;
+  return (TIER_RANK[tier] ?? 0) >= TIER_RANK[need];
+}
+function requireFeature(feature) {
+  return (req, res, next) => {
+    if (req.user.platformAdmin || tierAllows(req.tier, feature)) return next();
+    const need = FEATURE_MIN_TIER[feature];
+    res.status(402).json({
+      error: 'This feature is not part of your current plan. Upgrade on the Subscription page to unlock it.',
+      code: 'feature_locked', feature, required_tier: need,
+    });
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -277,8 +318,8 @@ app.post('/api/auth/signup', async (req, res, next) => {
 
     // 1. Create the store (tenant) with a 14-day trial.
     const tid = (await pool.query(
-      `INSERT INTO tenants (store_name, owner_name, phone, plan, status, trial_ends_at)
-       VALUES ($1, $2, $3, 'trial', 'trial', now() + interval '14 days')
+      `INSERT INTO tenants (store_name, owner_name, phone, plan, status, tier, trial_ends_at)
+       VALUES ($1, $2, $3, 'trial', 'trial', 'elite', now() + interval '14 days')
        RETURNING id`,
       [String(store_name).trim().slice(0, 200), String(name).trim().slice(0, 200), String(phone || '').trim().slice(0, 30)]
     )).rows[0].id;
@@ -293,7 +334,7 @@ app.post('/api/auth/signup', async (req, res, next) => {
     // 3. Create the store owner account and log them in.
     const userId = await addUser(uname, String(password), String(name).trim(), 'owner', tid);
     const token = await createSession(userId);
-    res.json({ token, user: { id: userId, username: uname, name: String(name).trim(), role: 'owner', store_id: tid } });
+    res.json({ token, user: { id: userId, username: uname, name: String(name).trim(), role: 'owner', store_id: tid, tier: 'elite' } });
   } catch (e) { next(e); }
 });
 
@@ -325,8 +366,10 @@ app.post('/api/auth/login', async (req, res, next) => {
 
     // Kill-switch & trial enforcement at the front door: a suspended or
     // expired store cannot even log in (renewal re-opens it instantly).
+    let loginTier = 'starter';
     if (u.store_id) {
-      const t = (await pool.query('SELECT status, trial_ends_at, subscription_ends_at FROM tenants WHERE id = $1', [u.store_id])).rows[0];
+      const t = (await pool.query('SELECT status, tier, trial_ends_at, subscription_ends_at FROM tenants WHERE id = $1', [u.store_id])).rows[0];
+      if (t) loginTier = t.tier || 'starter';
       if (t) {
         const nowMs = Date.now();
         const trialOver = t.status === 'trial' && t.trial_ends_at && new Date(t.trial_ends_at).getTime() < nowMs;
@@ -341,7 +384,7 @@ app.post('/api/auth/login', async (req, res, next) => {
     }
 
     const token = await createSession(u.id);
-    res.json({ token, user: { id: u.id, username: u.username, name: u.name, role: u.role, platform_admin: u.platform_admin === 1, store_id: u.store_id } });
+    res.json({ token, user: { id: u.id, username: u.username, name: u.name, role: u.role, platform_admin: u.platform_admin === 1, store_id: u.store_id, tier: u.platform_admin === 1 ? 'elite' : loginTier } });
   } catch (e) { next(e); }
 });
 
@@ -352,7 +395,7 @@ app.post('/api/auth/logout', requireAuth, async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-app.get('/api/auth/me', requireAuth, (req, res) => res.json(req.user));
+app.get('/api/auth/me', requireAuth, (req, res) => res.json({ ...req.user, tier: req.tier }));
 
 app.post('/api/auth/change-password', requireAuth, async (req, res, next) => {
   try {
@@ -1096,7 +1139,7 @@ app.get('/api/khata', requireAuth, async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-app.post('/api/khata/customers', requireAuth, async (req, res, next) => {
+app.post('/api/khata/customers', requireAuth, requireFeature('khata'), async (req, res, next) => {
   try {
     const name = String(req.body?.name || '').trim();
     const phone = String(req.body?.phone || '').trim();
@@ -1132,7 +1175,7 @@ app.get('/api/khata/customers/:id', requireAuth, async (req, res, next) => {
 // note?, sale_id?, customer_id? | customer_name? } — when only a name is
 // given the customer is matched case-insensitively or created, so billing
 // needs exactly one call to put a bill on khata.
-app.post('/api/khata/entries', requireAuth, async (req, res, next) => {
+app.post('/api/khata/entries', requireAuth, requireFeature('khata'), async (req, res, next) => {
   try {
     const { kind, sale_id, customer_id, customer_name } = req.body || {};
     const amount = Number(req.body?.amount);
@@ -1299,7 +1342,7 @@ app.get('/api/public/invoice/:id/pdf', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-app.get('/api/whatsapp/summary', requireAuth, async (req, res, next) => {
+app.get('/api/whatsapp/summary', requireAuth, requireFeature('whatsapp_summary'), async (req, res, next) => {
   try {
     const [today, purchases, month, low, expiring, khata, settings] = await Promise.all([
       pool.query(
@@ -1426,7 +1469,7 @@ app.get('/api/reports/dashboard', requireAuth, async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-app.get('/api/reports/sales', requireAuth, async (req, res, next) => {
+app.get('/api/reports/sales', requireAuth, requireFeature('reports'), async (req, res, next) => {
   try {
     // Only well-formed YYYY-MM-DD filters reach the database; anything else
     // falls back to the default 30-day window.
@@ -1526,6 +1569,17 @@ app.post('/api/users', requireAuth, requireOwner, async (req, res, next) => {
     if (!username?.trim() || !password || !name?.trim()) return bad(res, 400, 'Name, username and password are required');
     if (String(password).length < 5) return bad(res, 400, 'Password must be at least 5 characters');
     if (!['owner', 'employee'].includes(role)) return bad(res, 400, 'Invalid role');
+    // Starter stores are capped at 3 accounts (owner + 2 staff). Existing
+    // accounts from a higher plan keep working — only new additions are blocked.
+    if (!tierAllows(req.tier, 'staff_unlimited')) {
+      const c = (await pool.query('SELECT COUNT(*)::int AS c FROM users WHERE store_id = $1 AND active = 1', [req.storeId])).rows[0].c;
+      if (c >= 3) {
+        return res.status(402).json({
+          error: 'The Starter plan allows up to 3 accounts (owner + 2 staff). Upgrade to Pro for unlimited staff accounts.',
+          code: 'feature_locked', feature: 'staff_unlimited', required_tier: 'pro',
+        });
+      }
+    }
     await addUser(String(username).trim(), String(password), String(name).trim(), role, req.storeId);
     res.json({ ok: true });
   } catch (e) {
@@ -1611,7 +1665,7 @@ function importNumber(v) {
   return isFinite(n) ? n : NaN;
 }
 
-app.post('/api/import/parse', requireAuth, requireOwner, async (req, res, next) => {
+app.post('/api/import/parse', requireAuth, requireFeature('import'), requireOwner, async (req, res, next) => {
   try {
     const b64 = String((req.body || {}).file_base64 || '');
     if (!b64) return bad(res, 400, 'No file received');
@@ -1649,7 +1703,7 @@ app.post('/api/import/parse', requireAuth, requireOwner, async (req, res, next) 
   } catch (e) { next(e); }
 });
 
-app.post('/api/import/commit', requireAuth, requireOwner, async (req, res, next) => {
+app.post('/api/import/commit', requireAuth, requireFeature('import'), requireOwner, async (req, res, next) => {
   try {
     const rows = Array.isArray((req.body || {}).rows) ? req.body.rows : [];
     if (!rows.length) return bad(res, 400, 'No rows to import');
@@ -1798,7 +1852,7 @@ app.get('/api/founder/tenants', requireAuth, requirePlatformAdmin, async (req, r
     let query = `
       SELECT
         id, store_name, owner_name, phone, email, city, state, license_number,
-        plan, status, price_per_month::float8 AS price_per_month,
+        plan, status, tier, price_per_month::float8 AS price_per_month,
         trial_ends_at, subscription_ends_at,
         (SELECT COUNT(*) FROM sales s WHERE s.store_id = t.id)::int AS total_bills,
         (SELECT COUNT(*) FROM medicines m WHERE m.store_id = t.id AND m.active = 1)::int AS total_medicines,
@@ -1844,6 +1898,7 @@ app.post('/api/founder/tenants', requireAuth, requirePlatformAdmin, async (req, 
       license_number,
       plan,
       trial_days,
+      tier,
     } = req.body || {};
 
     if (!store_name?.trim() || !owner_name?.trim() || !phone?.trim()) {
@@ -1856,12 +1911,16 @@ app.post('/api/founder/tenants', requireAuth, requirePlatformAdmin, async (req, 
     const perMonth = { monthly: 599.00, yearly: 416.00, lifetime: 277.00 }; // matches BILLING_PLANS
     const planMonths = { monthly: 1, yearly: 12, lifetime: 36 };
     const price = perMonth[assignedPlan] || 599.00;
+    // Feature tier: explicit choice wins, otherwise trial/lifetime = Elite.
+    const assignedTier = ['starter', 'pro', 'elite'].includes(tier)
+      ? tier
+      : (assignedPlan === 'trial' || assignedPlan === 'lifetime' ? 'elite' : 'pro');
 
     const { rows } = await pool.query(
       `INSERT INTO tenants (
         store_name, owner_name, phone, email, city, state, address, license_number,
-        plan, status, price_per_month, trial_ends_at, subscription_ends_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now() + make_interval(days => $12::int), CASE WHEN $9 = 'trial' THEN NULL ELSE now() + make_interval(months => $13::int) END)
+        plan, status, price_per_month, trial_ends_at, subscription_ends_at, tier
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now() + make_interval(days => $12::int), CASE WHEN $9 = 'trial' THEN NULL ELSE now() + make_interval(months => $13::int) END, $14)
       RETURNING *`,
       [
         String(store_name).trim(),
@@ -1877,6 +1936,7 @@ app.post('/api/founder/tenants', requireAuth, requirePlatformAdmin, async (req, 
         price,
         trialDuration,
         planMonths[assignedPlan] || 1,
+        assignedTier,
       ]
     );
 
@@ -1959,23 +2019,41 @@ app.put('/api/founder/tenants/:id/extend-trial', requireAuth, requirePlatformAdm
 app.put('/api/founder/tenants/:id/plan', requireAuth, requirePlatformAdmin, async (req, res, next) => {
   try {
     const id = asId(req.params.id);
-    const { plan, duration_months } = req.body || {};
-    const valid = ['trial', 'monthly', 'yearly', 'lifetime'];
-    if (!valid.includes(plan)) return bad(res, 400, 'Invalid plan type');
+    const { plan, duration_months, tier } = req.body || {};
 
-    const defaultMonths = { monthly: 1, yearly: 12, lifetime: 36 };
-    const perMonth = { monthly: 599.00, yearly: 416.00, lifetime: 277.00 }; // matches Razorpay BILLING_PLANS
-    const months = parseInt(duration_months, 10) || defaultMonths[plan] || 1;
-    const price = perMonth[plan] || 599.00;
+    // Accept either a full SKU id ("pro-yearly") or a legacy cycle id
+    // ("monthly"/"yearly"/"lifetime"/"trial") — tier follows the SKU unless
+    // the founder picks one explicitly.
+    const sku = resolvePlanId(plan);
+    let months;
+    let price;
+    let assignedTier;
+    if (sku) {
+      const p = BILLING_PLANS[sku];
+      months = parseInt(duration_months, 10) || p.months;
+      price = p.price_per_month;
+      assignedTier = ['starter', 'pro', 'elite'].includes(tier) ? tier : p.tier;
+    } else {
+      const valid = ['trial', 'monthly', 'yearly', 'lifetime'];
+      if (!valid.includes(plan)) return bad(res, 400, 'Invalid plan type');
+      const defaultMonths = { monthly: 1, yearly: 12, lifetime: 36 };
+      const perMonth = { monthly: 599.00, yearly: 416.00, lifetime: 277.00 }; // matches Razorpay BILLING_PLANS
+      months = parseInt(duration_months, 10) || defaultMonths[plan] || 1;
+      price = perMonth[plan] || 599.00;
+      assignedTier = ['starter', 'pro', 'elite'].includes(tier)
+        ? tier
+        : (plan === 'trial' || plan === 'lifetime' ? 'elite' : 'pro');
+    }
 
     const { rows } = await pool.query(
       `UPDATE tenants
        SET plan = $1,
            status = 'active',
+           tier = $5,
            price_per_month = $2,
            subscription_ends_at = now() + make_interval(months => $3::int)
        WHERE id = $4 RETURNING *`,
-      [plan, price, months, id]
+      [sku || plan, price, months, id, assignedTier]
     );
     if (!rows[0]) return bad(res, 404, 'Pharmacy tenant not found');
     res.json(rows[0]);
@@ -2025,17 +2103,30 @@ function getRazorpay() {
   return razorpay;
 }
 
-// Public plan catalog (used by both the client paywall and the founder panel)
+// Public plan catalog (used by both the client paywall and the founder panel).
+// Plans are <tier>-<cycle>; `tier` decides the feature set, the cycle decides
+// the billing duration.
 const BILLING_PLANS = {
-  monthly: { label: 'Monthly Starter', amount: 59900, months: 1, price_per_month: 599.0, tagline: 'Full POS + WhatsApp bills' },
-  yearly: { label: 'Yearly Pro (Best Value)', amount: 499900, months: 12, price_per_month: 416.0, tagline: '2 months free + priority support' },
-  lifetime: { label: '3-Year Founder Pack', amount: 999900, months: 36, price_per_month: 277.0, tagline: '3 years, zero renewal hassle' },
+  'starter-monthly': { tier: 'starter', label: 'Starter — Monthly', amount: 29900, months: 1, price_per_month: 299.0, tagline: 'Billing, stock & expiry alerts' },
+  'starter-yearly': { tier: 'starter', label: 'Starter — Yearly', amount: 299900, months: 12, price_per_month: 250.0, tagline: '2 months free vs monthly' },
+  'pro-monthly': { tier: 'pro', label: 'Pro — Monthly', amount: 59900, months: 1, price_per_month: 599.0, tagline: 'Khata, WhatsApp bills, full reports' },
+  'pro-yearly': { tier: 'pro', label: 'Pro — Yearly (Best Value)', amount: 499900, months: 12, price_per_month: 416.0, tagline: '2 months free + priority support' },
+  'elite-monthly': { tier: 'elite', label: 'Elite — Monthly', amount: 99900, months: 1, price_per_month: 999.0, tagline: 'Scanner + WhatsApp daily summary' },
+  'elite-yearly': { tier: 'elite', label: 'Elite — Yearly', amount: 799900, months: 12, price_per_month: 666.0, tagline: 'Full power at the best Elite price' },
+  'elite-3yr': { tier: 'elite', label: 'Founder Pack — 3 Years', amount: 999900, months: 36, price_per_month: 277.0, tagline: 'Launch offer: 3 years of Elite' },
 };
+// Legacy plan ids sent by older app builds already in the field map onto the
+// closest new SKU so those clients keep renewing correctly.
+const PLAN_ALIASES = { monthly: 'pro-monthly', yearly: 'pro-yearly', lifetime: 'elite-3yr' };
+function resolvePlanId(raw) {
+  const id = String(raw || '').trim();
+  return BILLING_PLANS[id] ? id : (PLAN_ALIASES[id] || null);
+}
 
 app.get('/api/billing/plans', (req, res) => {
   res.json({
     plans: Object.entries(BILLING_PLANS).map(([id, p]) => ({
-      id, label: p.label, amount: p.amount, months: p.months,
+      id, tier: p.tier, label: p.label, amount: p.amount, months: p.months,
       price_per_month: p.price_per_month, tagline: p.tagline,
     })),
     gateway: getRazorpay() ? 'razorpay' : 'not_configured',
@@ -2066,17 +2157,19 @@ async function ensureTenantPaymentsTable() {
 ensureTenantPaymentsTable().catch(() => {});
 
 /** Mark a tenant paid: extend subscription from today (or from existing expiry
-    if still valid, so renewals stack) and flip status to active. */
-async function activateTenantSubscription(tenantId, months) {
+    if still valid, so renewals stack) and flip status to active. `tier` comes
+    from the purchased SKU and upgrades/downgrades the store's feature tier. */
+async function activateTenantSubscription(tenantId, months, tier, pricePerMonth) {
   const { rows } = await pool.query(
     `UPDATE tenants t
      SET status = 'active',
-         plan = CASE WHEN $2::int >= 12 THEN 'yearly' ELSE 'monthly' END,
+         plan = CASE WHEN $2::int >= 36 THEN 'lifetime' WHEN $2::int >= 12 THEN 'yearly' ELSE 'monthly' END,
+         tier = COALESCE($4, t.tier),
          price_per_month = $3,
          subscription_ends_at = GREATEST(t.subscription_ends_at, now()) + make_interval(months => $2::int)
      WHERE t.id = $1
      RETURNING *`,
-    [tenantId, months, months >= 12 ? 416.0 : 599.0]
+    [tenantId, months, pricePerMonth || 416.0, tier || null]
   );
   return rows[0] || null;
 }
@@ -2098,7 +2191,8 @@ async function handlePaymentSuccess(orderId, paymentId, signature, method) {
 
   if (pr.status !== 'paid') {
     // idempotent-ish: only extend the subscription the first time
-    await activateTenantSubscription(pr.tenant_id, pr.months);
+    const purchased = BILLING_PLANS[pr.plan];
+    await activateTenantSubscription(pr.tenant_id, pr.months, purchased?.tier, purchased?.price_per_month);
   }
   return pr;
 }
@@ -2111,9 +2205,8 @@ app.post('/api/billing/create-order', requireAuth, async (req, res, next) => {
     const rp = getRazorpay();
     if (!rp) return bad(res, 503, 'Payment gateway is not configured yet. Please contact support.');
 
-    const planId = String(req.body?.plan || 'yearly');
+    const planId = resolvePlanId(req.body?.plan) || 'pro-yearly';
     const plan = BILLING_PLANS[planId];
-    if (!plan) return bad(res, 400, 'Invalid plan');
 
     // The logged-in user always belongs to exactly one store.
     const t = (await pool.query('SELECT id, store_name FROM tenants WHERE id = $1', [req.storeId])).rows[0];
@@ -2159,7 +2252,8 @@ app.post('/api/billing/verify', requireAuth, async (req, res, next) => {
       return bad(res, 400, 'Payment signature verification failed');
     }
     const pr = await handlePaymentSuccess(razorpay_order_id, razorpay_payment_id, razorpay_signature, 'checkout');
-    const tenant = await activateTenantSubscription(pr.tenant_id, pr.months); // re-read fresh row
+    const purchased = BILLING_PLANS[pr.plan];
+    const tenant = await activateTenantSubscription(pr.tenant_id, pr.months, purchased?.tier, purchased?.price_per_month); // re-read fresh row
     res.json({ ok: true, tenant });
   } catch (e) { next(e); }
 });
@@ -2197,8 +2291,8 @@ app.post('/api/founder/tenants/:id/payment-link', requireAuth, requirePlatformAd
     const tenant = (await pool.query('SELECT * FROM tenants WHERE id = $1', [id])).rows[0];
     if (!tenant) return bad(res, 404, 'Tenant not found');
 
-    const planId = String(req.body?.plan || 'yearly');
-    const plan = BILLING_PLANS[planId];
+    const planId = resolvePlanId(req.body?.plan);
+    const plan = planId ? BILLING_PLANS[planId] : null;
     if (!plan) return bad(res, 400, 'Invalid plan');
 
     const link = await rp.paymentLink.create({

@@ -12,6 +12,9 @@ import WhatsAppIcon from '@mui/icons-material/WhatsApp';
 import { BarChart } from '@mui/x-charts/BarChart';
 import { api } from '../api';
 import { fmt, fmtQty } from '../utils';
+import { useAuth } from '../auth';
+import { tierAllows, userTier } from '../tiers';
+import UpgradeDialog from '../components/UpgradeDialog';
 
 function StatCard({ icon, title, value, color, link, linkLabel }) {
   return (
@@ -39,6 +42,9 @@ export default function Dashboard() {
   const [alerts, setAlerts] = useState(null);
   const [error, setError] = useState('');
   const [waBusy, setWaBusy] = useState(false);
+  const { user } = useAuth();
+  const [upgrade, setUpgrade] = useState(null);
+  const can = (f) => tierAllows(userTier(user), f);
 
   useEffect(() => {
     api('/api/reports/dashboard').then(setDash).catch((e) => setError(e.message));
@@ -48,12 +54,14 @@ export default function Dashboard() {
   // Fetch today's ready-made summary from the server and hand it to WhatsApp
   // as a share link — the owner picks the chat (usually his own) and taps send.
   const sendWhatsApp = async () => {
+    if (!can('whatsapp_summary')) { setUpgrade({ feature: 'whatsapp_summary', requiredTier: 'elite' }); return; }
     setWaBusy(true);
     try {
       const d = await api('/api/whatsapp/summary');
       window.open('https://api.whatsapp.com/send?text=' + encodeURIComponent(d.text), '_blank');
     } catch (e) {
-      setError(e.message);
+      if (e.code === 'feature_locked') setUpgrade({ feature: e.feature, requiredTier: e.required_tier });
+      else setError(e.message);
     }
     setWaBusy(false);
   };
@@ -157,6 +165,7 @@ export default function Dashboard() {
           </Paper>
         </Grid>
       </Grid>
+      <UpgradeDialog open={!!upgrade} onClose={() => setUpgrade(null)} feature={upgrade?.feature} requiredTier={upgrade?.requiredTier} />
     </Box>
   );
 }
