@@ -38,6 +38,12 @@ const MAX_FAILED_LOGINS = 8;      // per username
 const LOCKOUT_MINUTES = 15;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+/* Every shop runs on Indian time, so "day" boundaries follow the shop's wall
+   clock (IST), not the database server's timezone — a bill saved at 00:30
+   stays on today's list instead of landing on yesterday. */
+const istDay = (col) => `(${col} AT TIME ZONE 'Asia/Kolkata')::date`;
+const IST_TODAY = "(now() AT TIME ZONE 'Asia/Kolkata')::date";
+
 /* Shareable invoice links: an unguessable token per sale so customers can open
    their bill without logging in. Derived from DATABASE_URL instead of stored —
    rotating the database rotates old links, which is acceptable. */
@@ -434,7 +440,7 @@ app.get('/api/medicines', requireAuth, async (req, res, next) => {
 app.get('/api/medicines/:id/batches', requireAuth, async (req, res, next) => {
   try {
     const { rows } = await pool.query(
-      'SELECT b.id, b.batch_number, b.expiry_date, b.quantity, (b.expiry_date - CURRENT_DATE) AS days_left FROM batches b JOIN medicines m ON m.id = b.medicine_id WHERE b.medicine_id = $1 AND m.store_id = $2 AND b.quantity > 0 ORDER BY b.expiry_date ASC',
+      `SELECT b.id, b.batch_number, b.expiry_date, b.quantity, (b.expiry_date - ${IST_TODAY}) AS days_left FROM batches b JOIN medicines m ON m.id = b.medicine_id WHERE b.medicine_id = $1 AND m.store_id = $2 AND b.quantity > 0 ORDER BY b.expiry_date ASC`,
       [asId(req.params.id), req.storeId]
     );
     res.json(rows);
@@ -448,7 +454,7 @@ app.get('/api/medicines/:id/detail', requireAuth, async (req, res, next) => {
     const med = (await pool.query('SELECT * FROM medicines WHERE id = $1 AND store_id = $2', [medId, req.storeId])).rows[0];
     if (!med) return bad(res, 404, 'Medicine not found');
     const batches = (await pool.query(
-      'SELECT id, batch_number, expiry_date, quantity, (expiry_date - CURRENT_DATE) AS days_left FROM batches WHERE medicine_id = $1 ORDER BY expiry_date ASC',
+      `SELECT id, batch_number, expiry_date, quantity, (expiry_date - ${IST_TODAY}) AS days_left FROM batches WHERE medicine_id = $1 ORDER BY expiry_date ASC`,
       [medId]
     )).rows;
     const writeoffs = (await pool.query(
@@ -635,9 +641,14 @@ app.delete('/api/companies/:id', requireAuth, requireOwner, async (req, res, nex
 // ---------------------------------------------------------------------------
 app.get('/api/purchases', requireAuth, async (req, res, next) => {
   try {
+    // Optional YYYY-MM-DD window (IST days); missing/malformed bounds stay open.
+    const qFrom = String(req.query.from || '');
+    const qTo = String(req.query.to || '');
+    const from = DATE_RE.test(qFrom) ? qFrom : '1970-01-01';
+    const to = DATE_RE.test(qTo) ? qTo : '2999-12-31';
     const { rows } = await pool.query(
-      'SELECT p.id, p.invoice_number, p.supplier_name, p.total::float8 AS total, p.created_at, p.status, p.reversed_at, p.reverse_reason, u.name AS created_by, COUNT(pi.id)::int AS item_count FROM purchases p JOIN users u ON u.id = p.user_id LEFT JOIN purchase_items pi ON pi.purchase_id = p.id WHERE p.store_id = $1 GROUP BY p.id, u.name ORDER BY p.id DESC LIMIT 200',
-      [req.storeId]
+      `SELECT p.id, p.invoice_number, p.supplier_name, p.total::float8 AS total, p.created_at, p.status, p.reversed_at, p.reverse_reason, u.name AS created_by, COUNT(pi.id)::int AS item_count FROM purchases p JOIN users u ON u.id = p.user_id LEFT JOIN purchase_items pi ON pi.purchase_id = p.id WHERE p.store_id = $1 AND ${istDay('p.created_at')} BETWEEN $2 AND $3 GROUP BY p.id, u.name ORDER BY p.id DESC LIMIT 200`,
+      [req.storeId, from, to]
     );
     res.json(rows);
   } catch (e) { next(e); }
@@ -940,7 +951,7 @@ app.get('/api/sales', requireAuth, async (req, res, next) => {
     const from = DATE_RE.test(qFrom) ? qFrom : '1970-01-01';
     const to = DATE_RE.test(qTo) ? qTo : '2999-12-31';
     const { rows } = await pool.query(
-      'SELECT s.id, s.invoice_number, s.customer_name, s.subtotal, s.gst_amount, s.total, s.created_at, s.status, s.cancelled_at, s.cancel_reason, u.name AS served_by, COUNT(si.id)::int AS item_count, COALESCE(SUM(si.quantity), 0)::int AS units, COALESCE(SUM(si.returned_qty), 0)::int AS returned_units FROM sales s JOIN users u ON u.id = s.user_id LEFT JOIN sale_items si ON si.sale_id = s.id WHERE s.store_id = $3 AND s.created_at::date BETWEEN $1 AND $2 GROUP BY s.id, u.name ORDER BY s.id DESC LIMIT 300',
+      'SELECT s.id, s.invoice_number, s.customer_name, s.subtotal, s.gst_amount, s.total, s.created_at, s.status, s.cancelled_at, s.cancel_reason, u.name AS served_by, COUNT(si.id)::int AS item_count, COALESCE(SUM(si.quantity), 0)::int AS units, COALESCE(SUM(si.returned_qty), 0)::int AS returned_units FROM sales s JOIN users u ON u.id = s.user_id LEFT JOIN sale_items si ON si.sale_id = s.id WHERE s.store_id = $3 AND ' + istDay('s.created_at') + ' BETWEEN $1 AND $2 GROUP BY s.id, u.name ORDER BY s.id DESC LIMIT 300',
       [from, to, req.storeId]
     );
     // NUMERIC comes back as strings — hand the client plain numbers.
@@ -1110,7 +1121,7 @@ app.get('/api/alerts', requireAuth, async (req, res, next) => {
     )).rows;
 
     const expiring = (await pool.query(
-      'SELECT b.id, b.batch_number, b.expiry_date, b.quantity, m.name, m.company, m.shelf, (b.expiry_date - CURRENT_DATE) AS days_left FROM batches b JOIN medicines m ON m.id = b.medicine_id WHERE m.store_id = $1 AND b.quantity > 0 AND b.expiry_date <= CURRENT_DATE + 90 ORDER BY b.expiry_date ASC',
+      `SELECT b.id, b.batch_number, b.expiry_date, b.quantity, m.name, m.company, m.shelf, (b.expiry_date - ${IST_TODAY}) AS days_left FROM batches b JOIN medicines m ON m.id = b.medicine_id WHERE m.store_id = $1 AND b.quantity > 0 AND b.expiry_date <= ${IST_TODAY} + 90 ORDER BY b.expiry_date ASC`,
       [req.storeId]
     )).rows;
 
@@ -1346,15 +1357,15 @@ app.get('/api/whatsapp/summary', requireAuth, requireFeature('whatsapp_summary')
   try {
     const [today, purchases, month, low, expiring, khata, settings] = await Promise.all([
       pool.query(
-        "SELECT COUNT(DISTINCT s.id)::int AS bills, COALESCE(SUM((si.quantity - si.returned_qty) * si.unit_price * (1 + COALESCE(si.gst_rate,0)/100.0)), 0)::float8 AS revenue, COALESCE(SUM((si.unit_price - si.cost_price) * (si.quantity - si.returned_qty)), 0)::float8 AS profit FROM sales s LEFT JOIN sale_items si ON si.sale_id = s.id WHERE s.store_id = $1 AND s.created_at::date = CURRENT_DATE AND s.status != 'cancelled'",
+        `SELECT COUNT(DISTINCT s.id)::int AS bills, COALESCE(SUM((si.quantity - si.returned_qty) * si.unit_price * (1 + COALESCE(si.gst_rate,0)/100.0)), 0)::float8 AS revenue, COALESCE(SUM((si.unit_price - si.cost_price) * (si.quantity - si.returned_qty)), 0)::float8 AS profit FROM sales s LEFT JOIN sale_items si ON si.sale_id = s.id WHERE s.store_id = $1 AND ${istDay('s.created_at')} = ${IST_TODAY} AND s.status != 'cancelled'`,
         [req.storeId]
       ),
       pool.query(
-        'SELECT COUNT(*)::int AS bills, COALESCE(SUM(total), 0)::float8 AS amount FROM purchases WHERE store_id = $1 AND created_at::date = CURRENT_DATE AND reversed_at IS NULL',
+        `SELECT COUNT(*)::int AS bills, COALESCE(SUM(total), 0)::float8 AS amount FROM purchases WHERE store_id = $1 AND ${istDay('created_at')} = ${IST_TODAY} AND reversed_at IS NULL`,
         [req.storeId]
       ),
       pool.query(
-        "SELECT COUNT(DISTINCT s.id)::int AS bills, COALESCE(SUM((si.quantity - si.returned_qty) * si.unit_price * (1 + COALESCE(si.gst_rate,0)/100.0)), 0)::float8 AS revenue FROM sales s LEFT JOIN sale_items si ON si.sale_id = s.id WHERE s.store_id = $1 AND s.created_at::date >= date_trunc('month', CURRENT_DATE)::date AND s.status != 'cancelled'",
+        `SELECT COUNT(DISTINCT s.id)::int AS bills, COALESCE(SUM((si.quantity - si.returned_qty) * si.unit_price * (1 + COALESCE(si.gst_rate,0)/100.0)), 0)::float8 AS revenue FROM sales s LEFT JOIN sale_items si ON si.sale_id = s.id WHERE s.store_id = $1 AND ${istDay('s.created_at')} >= date_trunc('month', ${IST_TODAY})::date AND s.status != 'cancelled'`,
         [req.storeId]
       ),
       pool.query(
@@ -1362,7 +1373,7 @@ app.get('/api/whatsapp/summary', requireAuth, requireFeature('whatsapp_summary')
         [req.storeId]
       ),
       pool.query(
-        'SELECT m.name, b.batch_number, (b.expiry_date - CURRENT_DATE) AS days_left FROM batches b JOIN medicines m ON m.id = b.medicine_id WHERE m.store_id = $1 AND b.quantity > 0 AND b.expiry_date <= CURRENT_DATE + 90 ORDER BY b.expiry_date ASC',
+        `SELECT m.name, b.batch_number, (b.expiry_date - ${IST_TODAY}) AS days_left FROM batches b JOIN medicines m ON m.id = b.medicine_id WHERE m.store_id = $1 AND b.quantity > 0 AND b.expiry_date <= ${IST_TODAY} + 90 ORDER BY b.expiry_date ASC`,
         [req.storeId]
       ),
       pool.query(
@@ -1380,7 +1391,7 @@ app.get('/api/whatsapp/summary', requireAuth, requireFeature('whatsapp_summary')
 
     const lines = [];
     lines.push(`🏥 *${store}* — *Daily Business Summary*`);
-    lines.push(`📅 *Date:* ${new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`);
+    lines.push(`📅 *Date:* ${new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' })}`);
     lines.push('━━━━━━━━━━━━━━━━━━━━━');
     lines.push('💵 *TODAY\'S PERFORMANCE*');
     lines.push(`• 💰 *Sales:* ${inr(t.revenue)} *(${t.bills} ${t.bills === 1 ? 'bill' : 'bills'})*`);
@@ -1441,27 +1452,27 @@ app.get('/api/whatsapp/summary', requireAuth, requireFeature('whatsapp_summary')
 app.get('/api/reports/dashboard', requireAuth, async (req, res, next) => {
   try {
     const today = (await pool.query(
-      "SELECT COUNT(DISTINCT s.id)::int AS bills, COALESCE(SUM((si.quantity - si.returned_qty) * si.unit_price * (1 + COALESCE(si.gst_rate,0)/100.0)), 0)::float8 AS revenue FROM sales s LEFT JOIN sale_items si ON si.sale_id = s.id WHERE s.store_id = $1 AND s.created_at::date = CURRENT_DATE AND s.status != 'cancelled'",
+      `SELECT COUNT(DISTINCT s.id)::int AS bills, COALESCE(SUM((si.quantity - si.returned_qty) * si.unit_price * (1 + COALESCE(si.gst_rate,0)/100.0)), 0)::float8 AS revenue FROM sales s LEFT JOIN sale_items si ON si.sale_id = s.id WHERE s.store_id = $1 AND ${istDay('s.created_at')} = ${IST_TODAY} AND s.status != 'cancelled'`,
       [req.storeId]
     )).rows[0];
 
     const todayProfit = (await pool.query(
-      "SELECT COALESCE(SUM((si.unit_price - si.cost_price) * (si.quantity - si.returned_qty)), 0)::float8 AS profit FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE s.store_id = $1 AND s.created_at::date = CURRENT_DATE AND s.status != 'cancelled'",
+      `SELECT COALESCE(SUM((si.unit_price - si.cost_price) * (si.quantity - si.returned_qty)), 0)::float8 AS profit FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE s.store_id = $1 AND ${istDay('s.created_at')} = ${IST_TODAY} AND s.status != 'cancelled'`,
       [req.storeId]
     )).rows[0].profit;
 
     const last7 = (await pool.query(
-      "SELECT s.created_at::date AS day, COALESCE(SUM((si.quantity - si.returned_qty) * si.unit_price * (1 + COALESCE(si.gst_rate,0)/100.0)), 0)::float8 AS revenue, COUNT(DISTINCT s.id)::int AS bills FROM sales s LEFT JOIN sale_items si ON si.sale_id = s.id WHERE s.store_id = $1 AND s.created_at::date >= CURRENT_DATE - 6 AND s.status != 'cancelled' GROUP BY day ORDER BY day",
+      `SELECT ${istDay('s.created_at')} AS day, COALESCE(SUM((si.quantity - si.returned_qty) * si.unit_price * (1 + COALESCE(si.gst_rate,0)/100.0)), 0)::float8 AS revenue, COUNT(DISTINCT s.id)::int AS bills FROM sales s LEFT JOIN sale_items si ON si.sale_id = s.id WHERE s.store_id = $1 AND ${istDay('s.created_at')} >= ${IST_TODAY} - 6 AND s.status != 'cancelled' GROUP BY day ORDER BY day`,
       [req.storeId]
     )).rows;
 
     const alerts = (await pool.query(
-      'SELECT (SELECT COUNT(*)::int FROM (SELECT m.id FROM medicines m LEFT JOIN batches b ON b.medicine_id = m.id WHERE m.store_id = $1 AND m.active = 1 GROUP BY m.id HAVING COALESCE(SUM(b.quantity), 0) <= m.low_stock_threshold) t_low) AS low, (SELECT COUNT(*)::int FROM batches b JOIN medicines m ON m.id = b.medicine_id WHERE m.store_id = $1 AND b.quantity > 0 AND b.expiry_date <= CURRENT_DATE + 90) AS expiring',
+      `SELECT (SELECT COUNT(*)::int FROM (SELECT m.id FROM medicines m LEFT JOIN batches b ON b.medicine_id = m.id WHERE m.store_id = $1 AND m.active = 1 GROUP BY m.id HAVING COALESCE(SUM(b.quantity), 0) <= m.low_stock_threshold) t_low) AS low, (SELECT COUNT(*)::int FROM batches b JOIN medicines m ON m.id = b.medicine_id WHERE m.store_id = $1 AND b.quantity > 0 AND b.expiry_date <= ${IST_TODAY} + 90) AS expiring`,
       [req.storeId]
     )).rows[0];
 
     const topSellers = (await pool.query(
-      "SELECT si.medicine_name AS name, si.company, SUM(si.quantity - si.returned_qty)::int AS qty, SUM((si.quantity - si.returned_qty) * si.unit_price)::float8 AS revenue FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE s.store_id = $1 AND s.created_at::date >= CURRENT_DATE - 6 AND s.status != 'cancelled' GROUP BY si.medicine_id, si.medicine_name, si.company HAVING SUM(si.quantity - si.returned_qty) > 0 ORDER BY qty DESC LIMIT 5",
+      `SELECT si.medicine_name AS name, si.company, SUM(si.quantity - si.returned_qty)::int AS qty, SUM((si.quantity - si.returned_qty) * si.unit_price)::float8 AS revenue FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE s.store_id = $1 AND ${istDay('s.created_at')} >= ${IST_TODAY} - 6 AND s.status != 'cancelled' GROUP BY si.medicine_id, si.medicine_name, si.company HAVING SUM(si.quantity - si.returned_qty) > 0 ORDER BY qty DESC LIMIT 5`,
       [req.storeId]
     )).rows;
 
@@ -1472,40 +1483,41 @@ app.get('/api/reports/dashboard', requireAuth, async (req, res, next) => {
 app.get('/api/reports/sales', requireAuth, requireFeature('reports'), async (req, res, next) => {
   try {
     // Only well-formed YYYY-MM-DD filters reach the database; anything else
-    // falls back to the default 30-day window.
+    // falls back to the default 30-day window (IST days).
     const qFrom = String(req.query.from || '');
     const qTo = String(req.query.to || '');
-    const from = DATE_RE.test(qFrom) ? qFrom : new Date(Date.now() - 29 * 86400000).toISOString().slice(0, 10);
-    const to = DATE_RE.test(qTo) ? qTo : new Date().toISOString().slice(0, 10);
+    const istDate = (ms) => new Date(ms).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const from = DATE_RE.test(qFrom) ? qFrom : istDate(Date.now() - 29 * 86400000);
+    const to = DATE_RE.test(qTo) ? qTo : istDate(Date.now());
 
     const summary = (await pool.query(
-      "SELECT COUNT(DISTINCT s.id)::int AS bills, COALESCE(SUM((si.quantity - si.returned_qty) * si.unit_price * (1 + COALESCE(si.gst_rate,0)/100.0)), 0)::float8 AS revenue, COALESCE(SUM(si.quantity - si.returned_qty), 0)::int AS units, COALESCE(SUM((si.unit_price - si.cost_price) * (si.quantity - si.returned_qty)), 0)::float8 AS profit FROM sales s LEFT JOIN sale_items si ON si.sale_id = s.id WHERE s.store_id = $3 AND s.created_at::date BETWEEN $1 AND $2 AND s.status != 'cancelled'",
+      `SELECT COUNT(DISTINCT s.id)::int AS bills, COALESCE(SUM((si.quantity - si.returned_qty) * si.unit_price * (1 + COALESCE(si.gst_rate,0)/100.0)), 0)::float8 AS revenue, COALESCE(SUM(si.quantity - si.returned_qty), 0)::int AS units, COALESCE(SUM((si.unit_price - si.cost_price) * (si.quantity - si.returned_qty)), 0)::float8 AS profit FROM sales s LEFT JOIN sale_items si ON si.sale_id = s.id WHERE s.store_id = $3 AND ${istDay('s.created_at')} BETWEEN $1 AND $2 AND s.status != 'cancelled'`,
       [from, to, req.storeId]
     )).rows[0];
 
     // Cancellations, returns and written-off stock for the same window.
     const refunds = (await pool.query(
-      'SELECT COUNT(*)::int AS count, COALESCE(SUM(r.refund_amount),0)::float8 AS amount FROM sale_returns r JOIN sales s ON s.id = r.sale_id WHERE s.store_id = $3 AND r.created_at::date BETWEEN $1 AND $2',
+      `SELECT COUNT(*)::int AS count, COALESCE(SUM(r.refund_amount),0)::float8 AS amount FROM sale_returns r JOIN sales s ON s.id = r.sale_id WHERE s.store_id = $3 AND ${istDay('r.created_at')} BETWEEN $1 AND $2`,
       [from, to, req.storeId]
     )).rows[0];
 
     const cancelled = (await pool.query(
-      "SELECT COUNT(*)::int AS count, COALESCE(SUM(total),0)::float8 AS amount FROM sales WHERE store_id = $3 AND status = 'cancelled' AND created_at::date BETWEEN $1 AND $2",
+      `SELECT COUNT(*)::int AS count, COALESCE(SUM(total),0)::float8 AS amount FROM sales WHERE store_id = $3 AND status = 'cancelled' AND ${istDay('created_at')} BETWEEN $1 AND $2`,
       [from, to, req.storeId]
     )).rows[0];
 
     const writeoffs = (await pool.query(
-      'SELECT COUNT(*)::int AS count, COALESCE(SUM(quantity),0)::int AS units, COALESCE(SUM(cost_value),0)::float8 AS loss FROM stock_writeoffs WHERE store_id = $3 AND created_at::date BETWEEN $1 AND $2',
+      `SELECT COUNT(*)::int AS count, COALESCE(SUM(quantity),0)::int AS units, COALESCE(SUM(cost_value),0)::float8 AS loss FROM stock_writeoffs WHERE store_id = $3 AND ${istDay('created_at')} BETWEEN $1 AND $2`,
       [from, to, req.storeId]
     )).rows[0];
 
     const bestSellers = (await pool.query(
-      "SELECT si.medicine_name AS name, si.company, SUM(si.quantity - si.returned_qty)::int AS qty, SUM((si.quantity - si.returned_qty) * si.unit_price)::float8 AS revenue, SUM((si.unit_price - si.cost_price) * (si.quantity - si.returned_qty))::float8 AS profit FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE s.store_id = $3 AND s.created_at::date BETWEEN $1 AND $2 AND s.status != 'cancelled' GROUP BY si.medicine_id, si.medicine_name, si.company HAVING SUM(si.quantity - si.returned_qty) > 0 ORDER BY qty DESC LIMIT 10",
+      `SELECT si.medicine_name AS name, si.company, SUM(si.quantity - si.returned_qty)::int AS qty, SUM((si.quantity - si.returned_qty) * si.unit_price)::float8 AS revenue, SUM((si.unit_price - si.cost_price) * (si.quantity - si.returned_qty))::float8 AS profit FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE s.store_id = $3 AND ${istDay('s.created_at')} BETWEEN $1 AND $2 AND s.status != 'cancelled' GROUP BY si.medicine_id, si.medicine_name, si.company HAVING SUM(si.quantity - si.returned_qty) > 0 ORDER BY qty DESC LIMIT 10`,
       [from, to, req.storeId]
     )).rows;
 
     const sales = (await pool.query(
-      'SELECT s.id, s.invoice_number, s.total::float8 AS total, s.subtotal::float8 AS subtotal, s.gst_amount::float8 AS gst_amount, s.created_at, s.status, u.name AS served_by, COUNT(si.id)::int AS item_count, COALESCE(SUM(si.returned_qty),0)::int AS returned_units FROM sales s JOIN users u ON u.id = s.user_id LEFT JOIN sale_items si ON si.sale_id = s.id WHERE s.store_id = $3 AND s.created_at::date BETWEEN $1 AND $2 GROUP BY s.id, u.name ORDER BY s.id DESC LIMIT 100',
+      `SELECT s.id, s.invoice_number, s.total::float8 AS total, s.subtotal::float8 AS subtotal, s.gst_amount::float8 AS gst_amount, s.created_at, s.status, u.name AS served_by, COUNT(si.id)::int AS item_count, COALESCE(SUM(si.returned_qty),0)::int AS returned_units FROM sales s JOIN users u ON u.id = s.user_id LEFT JOIN sale_items si ON si.sale_id = s.id WHERE s.store_id = $3 AND ${istDay('s.created_at')} BETWEEN $1 AND $2 GROUP BY s.id, u.name ORDER BY s.id DESC LIMIT 100`,
       [from, to, req.storeId]
     )).rows;
 

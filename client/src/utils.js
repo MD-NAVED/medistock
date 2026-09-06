@@ -17,8 +17,10 @@ export const fmtDateTime = (s) => {
   return d.toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: true });
 };
 
-export const todayStr = () => new Date().toISOString().slice(0, 10);
-export const daysAgoStr = (n) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
+// Local calendar dates (the shop's wall clock), not UTC — matches the server's
+// IST day bucketing so "today" filters agree with the rows shown.
+export const todayStr = () => new Date().toLocaleDateString('en-CA');
+export const daysAgoStr = (n) => new Date(Date.now() - n * 86400000).toLocaleDateString('en-CA');
 
 export const MEDICINE_TYPES = ['Tablet', 'Capsule', 'Syrup', 'Injection', 'Drops', 'Ointment', 'Powder', 'Other'];
 export const GST_RATES = [0, 5, 12, 18, 28];

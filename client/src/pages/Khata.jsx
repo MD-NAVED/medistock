@@ -13,6 +13,7 @@ import { fmt, fmtDate, fmtDateTime } from '../utils';
 import { useAuth } from '../auth';
 import { tierAllows, userTier, FEATURE_MIN_TIER } from '../tiers';
 import UpgradeDialog from '../components/UpgradeDialog';
+import DateRangeFilter from '../components/DateRangeFilter';
 
 const KINDS = [
   { value: 'credit', label: 'Credit Given' },
@@ -35,6 +36,7 @@ export default function Khata() {
   const [newCust, setNewCust] = useState(null); // { name, phone }
   // Customer history dialog
   const [detail, setDetail] = useState(null); // loaded customer object
+  const [detailRange, setDetailRange] = useState({ from: '', to: '' }); // entry filter
   // Add-entry dialog: { customer_id, kind, amount, note } — customer_id null = ask name
   const [entry, setEntry] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -48,6 +50,7 @@ export default function Khata() {
   useEffect(() => { load(); }, []);
 
   const openDetail = (id) => {
+    setDetailRange({ from: '', to: '' });
     api('/api/khata/customers/' + id).then(setDetail).catch((e) => setSnack({ severity: 'error', message: e.message }));
   };
 
@@ -90,6 +93,16 @@ export default function Khata() {
 
   const totalDue = rows.reduce((s, r) => s + Math.max(0, r.balance), 0);
   const dueCount = rows.filter((r) => r.balance > 0.004).length;
+
+  // Entries shown in the history dialog: optional date filter. Display only —
+  // the pending balance above always covers every entry.
+  const localDay = (s) => new Date(s).toLocaleDateString('en-CA');
+  const shownEntries = detail ? detail.entries.filter((e) => {
+    const d = localDay(e.created_at);
+    if (detailRange.from && d < detailRange.from) return false;
+    if (detailRange.to && d > detailRange.to) return false;
+    return true;
+  }) : [];
 
   return (
     <Box>
@@ -199,6 +212,12 @@ export default function Khata() {
                 </Button>
               </Box>
 
+              {detail.entries.length > 0 && (
+                <Box sx={{ mt: 1, mb: 1 }}>
+                  <DateRangeFilter value={detailRange} onChange={setDetailRange} title="Find by date:" />
+                </Box>
+              )}
+
               <TableContainer sx={{ mt: 1 }}>
                 <Table size="small">
                   <TableHead>
@@ -213,7 +232,10 @@ export default function Khata() {
                     {detail.entries.length === 0 && (
                       <TableRow><TableCell colSpan={4}><Typography color="text.secondary" sx={{ py: 2, textAlign: 'center' }}>No entries found</Typography></TableCell></TableRow>
                     )}
-                    {detail.entries.map((e) => (
+                    {detail.entries.length > 0 && shownEntries.length === 0 && (
+                      <TableRow><TableCell colSpan={4}><Typography color="text.secondary" sx={{ py: 2, textAlign: 'center' }}>No entries in this date range — tap ✕ to clear</Typography></TableCell></TableRow>
+                    )}
+                    {shownEntries.map((e) => (
                       <TableRow key={e.id}>
                         <TableCell>{fmtDateTime(e.created_at)}</TableCell>
                         <TableCell>{kindChip(e.kind)}</TableCell>

@@ -17,6 +17,7 @@ import { api } from '../api';
 import { useAuth } from '../auth';
 import { tierAllows, userTier } from '../tiers';
 import UpgradeDialog from '../components/UpgradeDialog';
+import DateRangeFilter from '../components/DateRangeFilter';
 import { fmt, fmtDate, fmtDateTime, todayStr } from '../utils';
 import { parseInvoiceImage } from '../utils/invoiceParser';
 
@@ -59,6 +60,7 @@ export default function Purchases() {
   const isOwner = user.role === 'owner';
   const isMobile = useMediaQuery('(max-width:900px)');
   const [rows, setRows] = useState([]);
+  const [range, setRange] = useState({ from: '', to: '' });
   const [medicines, setMedicines] = useState([]);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -140,9 +142,12 @@ export default function Purchases() {
   };
 
   const load = () => {
-    api('/api/purchases').then(setRows).catch((e) => setSnack({ severity: 'error', message: e.message }));
+    const qs = (range.from || range.to)
+      ? `?from=${range.from || '1970-01-01'}&to=${range.to || '2999-12-31'}`
+      : '';
+    api('/api/purchases' + qs).then(setRows).catch((e) => setSnack({ severity: 'error', message: e.message }));
   };
-  useEffect(load, []);
+  useEffect(load, [range]);
 
   const openDetail = (row) => {
     setDetailId(row.id);
@@ -321,9 +326,19 @@ export default function Purchases() {
         📷 <b>Smart Camera Invoice Scanning Enabled</b>: Take a photo or upload a supplier bill to automatically extract items, batches & prices for review.
       </Alert>
 
+      <Box sx={{ mb: 2 }}>
+        <DateRangeFilter value={range} onChange={setRange} title="Find by date:" />
+      </Box>
+
       {isMobile ? (
         <Box>
-          {rows.length === 0 && <Alert severity="info">No purchases yet. Tap “New Entry” to add stock.</Alert>}
+          {rows.length === 0 && (
+            <Alert severity="info">
+              {(range.from || range.to)
+                ? 'No purchases found in this date range. Tap the ✕ to clear the filter.'
+                : 'No purchases yet. Tap “New Entry” to add stock.'}
+            </Alert>
+          )}
           {rows.map((row) => <PurchaseCard key={row.id} row={row} isOwner={isOwner} onOpen={openDetail} />)}
         </Box>
       ) : (
