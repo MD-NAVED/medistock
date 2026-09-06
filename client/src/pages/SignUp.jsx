@@ -67,7 +67,7 @@ export default function SignUp() {
             </Avatar>
             <Typography variant="h5">MediStock</Typography>
             <Typography variant="body2" color="text.secondary">
-              Register your store — free 30-day trial
+              Register your store — free 14-day trial
             </Typography>
           </Box>
 

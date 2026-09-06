@@ -239,7 +239,7 @@ function recentFailures(username) {
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 // First-time Store Registration — anyone can register a NEW pharmacy and get
-// their own isolated store space with a 30-day free trial. Every store's data
+// their own isolated store space with a 14-day free trial. Every store's data
 // (medicines, bills, khata) is private to that store.
 // ---------------------------------------------------------------------------
 app.post('/api/auth/signup', async (req, res, next) => {
@@ -259,10 +259,10 @@ app.post('/api/auth/signup', async (req, res, next) => {
       return bad(res, 409, 'That username is already taken');
     }
 
-    // 1. Create the store (tenant) with a 30-day trial.
+    // 1. Create the store (tenant) with a 14-day trial.
     const tid = (await pool.query(
       `INSERT INTO tenants (store_name, owner_name, phone, plan, status, trial_ends_at)
-       VALUES ($1, $2, $3, 'trial', 'trial', now() + interval '30 days')
+       VALUES ($1, $2, $3, 'trial', 'trial', now() + interval '14 days')
        RETURNING id`,
       [String(store_name).trim().slice(0, 200), String(name).trim().slice(0, 200), String(phone || '').trim().slice(0, 30)]
     )).rows[0].id;
@@ -1814,7 +1814,7 @@ app.post('/api/founder/tenants', requireAuth, requirePlatformAdmin, async (req, 
       return bad(res, 400, 'Store name, owner name, and phone number are required');
     }
 
-    const trialDuration = parseInt(trial_days, 10) || 30;
+    const trialDuration = parseInt(trial_days, 10) || 14;
     const assignedPlan = ['monthly', 'yearly', 'lifetime'].includes(plan) ? plan : 'trial';
     const status = assignedPlan === 'trial' ? 'trial' : 'active';
     const price = assignedPlan === 'yearly' ? 833.00 : 999.00;
