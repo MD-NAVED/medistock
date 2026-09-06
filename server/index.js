@@ -2126,6 +2126,9 @@ const BILLING_PLANS = {
   'elite-monthly': { tier: 'elite', label: 'Elite — Monthly', amount: 99900, months: 1, price_per_month: 999.0, tagline: 'Scanner + WhatsApp daily summary' },
   'elite-yearly': { tier: 'elite', label: 'Elite — Yearly', amount: 799900, months: 12, price_per_month: 666.0, tagline: 'Full power at the best Elite price' },
   'elite-3yr': { tier: 'elite', label: 'Founder Pack — 3 Years', amount: 999900, months: 36, price_per_month: 277.0, tagline: 'Launch offer: 3 years of Elite' },
+  // Founder-only ₹1 SKU to prove the payment chain end-to-end. Never shown
+  // to customers (client hides it; create-order rejects non-admins).
+  'test-1': { tier: 'starter', label: 'Test Plan — ₹1', amount: 100, months: 1, price_per_month: 1.0, tagline: '₹1 payment check — activates Starter for a month' },
 };
 // Legacy plan ids sent by older app builds already in the field map onto the
 // closest new SKU so those clients keep renewing correctly.
@@ -2219,6 +2222,7 @@ app.post('/api/billing/create-order', requireAuth, async (req, res, next) => {
 
     const planId = resolvePlanId(req.body?.plan) || 'pro-yearly';
     const plan = BILLING_PLANS[planId];
+    if (planId === 'test-1' && !req.user?.platformAdmin) return bad(res, 403, 'This plan is not available');
 
     // The logged-in user always belongs to exactly one store.
     const t = (await pool.query('SELECT id, store_name FROM tenants WHERE id = $1', [req.storeId])).rows[0];

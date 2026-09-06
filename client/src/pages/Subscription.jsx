@@ -8,6 +8,7 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import BoltIcon from '@mui/icons-material/Bolt';
 import RocketLaunchIcon from '@mui/icons-material/RocketLaunch';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ScienceIcon from '@mui/icons-material/Science';
 import { api } from '../api';
 import { useAuth } from '../auth';
 
@@ -98,7 +99,7 @@ export default function Subscription() {
   };
   const currentTier = ['starter', 'pro', 'elite'].includes(user?.tier) ? user.tier : 'starter';
 
-  const payNow = async () => {
+  const payNow = async (planOverride) => {
     setPaying(true);
     try {
       if (gateway !== 'razorpay' || !scriptLoaded.current) {
@@ -108,7 +109,7 @@ export default function Subscription() {
         });
         return;
       }
-      const order = await api('/api/billing/create-order', { method: 'POST', body: { plan: selectedPlan } });
+      const order = await api('/api/billing/create-order', { method: 'POST', body: { plan: planOverride || selectedPlan } });
 
       const rzp = new window.Razorpay({
         key: order.key_id,
@@ -168,6 +169,25 @@ export default function Subscription() {
         <Alert severity="warning" sx={{ mb: 2 }}>
           Online payment gateway is being set up. You will be able to pay in-app very soon.
         </Alert>
+      )}
+
+      {user?.platformAdmin && gateway === 'razorpay' && (
+        <Paper sx={{ p: 2, mb: 3, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap', border: '2px dashed #0b695c' }}>
+          <ScienceIcon sx={{ color: '#0b695c' }} />
+          <Box sx={{ minWidth: 0, flexGrow: 1 }}>
+            <Typography sx={{ fontWeight: 700, fontSize: 14 }}>Founder test — pay ₹1</Typography>
+            <Typography variant="caption" color="text.secondary">
+              Proves the full payment chain for one rupee. Only you can see this.
+            </Typography>
+          </Box>
+          <Button
+            variant="outlined"
+            disabled={paying}
+            onClick={() => { setSelectedPlan('test-1'); payNow('test-1'); }}
+          >
+            {paying ? 'Opening…' : 'Pay ₹1'}
+          </Button>
+        </Paper>
       )}
 
       <Stack alignItems="center" sx={{ mb: 3 }}>
