@@ -1,7 +1,12 @@
-const isNative = window.location.protocol === 'capacitor:' || window.location.protocol === 'file:';
+import { Capacitor } from '@capacitor/core';
+
+// Native detection MUST use the Capacitor SDK — Android's WebView origin is
+// https://localhost (not capacitor://), so protocol sniffing misses it and
+// API calls would hit the app's own local server instead of the real API.
+const isNative = Capacitor.isNativePlatform();
 // Use VITE_API_BASE for native (Capacitor) builds, relative for web (same-origin via Vercel rewrites)
 const API_BASE = isNative
-  ? (import.meta.env.VITE_API_BASE || '')
+  ? (import.meta.env.VITE_API_BASE || 'https://medistock-api.vercel.app')
   : '';
 
 export async function api(path, { method = 'GET', body } = {}) {
@@ -34,6 +39,11 @@ export async function api(path, { method = 'GET', body } = {}) {
     const err = new Error((data && data.error) || 'Request failed');
     err.status = res.status;
     throw err;
+  }
+  // A 2xx with an unparseable body (e.g. an HTML fallback page) must never
+  // bubble up as null — callers do data.token and would crash obscurely.
+  if (data === null) {
+    throw new Error('Server se galat response aaya. Internet check karke dobara try karein.');
   }
   return data;
 }

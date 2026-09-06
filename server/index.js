@@ -11,6 +11,10 @@ const allowedOrigins = [
   'http://localhost:3001',           // Local dev (server serves client)
   'http://localhost:3002',           // Local dev (medistock-admin)
   'http://localhost:3000',           // Next.js default port
+  'http://localhost',                // Capacitor Android WebView (default scheme, no port)
+  'https://localhost',               // Capacitor Android WebView (default scheme)
+  'capacitor://localhost',           // Capacitor iOS WebView
+  'ionic://localhost',               // Ionic WebView
   'http://127.0.0.1:3001',
   'http://127.0.0.1:3002',
   'https://medistock.vercel.app',    // Main Vercel frontend
