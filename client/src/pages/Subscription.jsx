@@ -54,7 +54,7 @@ export default function Subscription() {
       if (gateway !== 'razorpay' || !scriptLoaded.current) {
         setSnack({
           severity: 'warning',
-          message: 'Online payment abhi activate nahi hui. Thodi der baad try karein ya support se sampark karein.',
+          message: 'Online payment is not active yet. Please try again in a few minutes or contact support.',
         });
         return;
       }
@@ -74,11 +74,11 @@ export default function Subscription() {
             await api('/api/billing/verify', { method: 'POST', body: resp });
             setSnack({
               severity: 'success',
-              message: `Payment successful! Aapki subscription ${order.months} mahine ke liye activate ho gayi hai. 🎉`,
+              message: `Payment successful! Your subscription is now active for ${order.months} month(s). 🎉`,
             });
             loadPlans();
           } catch (e) {
-            setSnack({ severity: 'error', message: 'Payment verify nahi hui: ' + e.message });
+            setSnack({ severity: 'error', message: 'Payment verification failed: ' + e.message });
           }
         },
         modal: { ondismiss: () => setPaying(false) },
@@ -99,8 +99,8 @@ export default function Subscription() {
     <Box sx={{ maxWidth: 760, mx: 'auto' }}>
       {locked && (
         <Alert severity="error" sx={{ mb: 2 }}>
-          Aapki trial/subscription khatam ho gayi hai — store lock ho gaya hai.
-          Neeche se plan chun kar pay karein, payment hote hi turant unlock ho jayega.
+          Your trial or subscription has ended — your store is locked.
+          Choose a plan below and pay; the store unlocks the moment payment succeeds.
         </Alert>
       )}
       <Paper sx={{ p: { xs: 2.5, md: 4 }, textAlign: 'center', mb: 3, background: 'linear-gradient(135deg,#0b695c 0%,#0d8a75 100%)', color: '#fff' }}>
@@ -109,7 +109,7 @@ export default function Subscription() {
           MediStock Subscription Renew
         </Typography>
         <Typography sx={{ mt: 0.5, opacity: 0.9, fontSize: 14 }}>
-          Secure payment by Razorpay — UPI, Debit/Credit Card, NetBanking sab chalega.
+          Secure payment by Razorpay — UPI, Debit/Credit Card and NetBanking are all accepted.
         </Typography>
       </Paper>
 

@@ -49,7 +49,7 @@ export async function api(path, { method = 'GET', body } = {}) {
   // A 2xx with an unparseable body (e.g. an HTML fallback page) must never
   // bubble up as null — callers do data.token and would crash obscurely.
   if (data === null) {
-    throw new Error('Server se galat response aaya. Internet check karke dobara try karein.');
+    throw new Error('The server sent an invalid response. Check your internet connection and try again.');
   }
   return data;
 }

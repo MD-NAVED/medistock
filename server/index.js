@@ -219,7 +219,7 @@ function requireAuth(req, res, next) {
         const subOver = st === 'active' && row.subscription_ends_at && new Date(row.subscription_ends_at).getTime() < nowMs;
         if (st === 'suspended' || st === 'expired' || trialOver || subOver) {
           return res.status(403).json({
-            error: 'Store locked — trial khatam ya payment pending. Renew karke turant unlock karein.',
+            error: 'Store locked — your trial has ended or payment is pending. Renew to unlock instantly.',
             code: 'subscription_locked',
           });
         }
@@ -333,7 +333,7 @@ app.post('/api/auth/login', async (req, res, next) => {
         const subOver = t.status === 'active' && t.subscription_ends_at && new Date(t.subscription_ends_at).getTime() < nowMs;
         if (t.status === 'suspended' || t.status === 'expired' || trialOver || subOver) {
           return res.status(403).json({
-            error: 'Aapka store account locked hai — trial khatam ya payment pending. Renewal ke liye MediStock support se sampark karein.',
+            error: 'Your store account is locked — trial ended or payment pending. Contact MediStock support to renew.',
             code: 'subscription_locked',
           });
         }
@@ -2029,7 +2029,7 @@ function getRazorpay() {
 const BILLING_PLANS = {
   monthly: { label: 'Monthly Starter', amount: 59900, months: 1, price_per_month: 599.0, tagline: 'Full POS + WhatsApp bills' },
   yearly: { label: 'Yearly Pro (Best Value)', amount: 499900, months: 12, price_per_month: 416.0, tagline: '2 months free + priority support' },
-  lifetime: { label: '3-Year Founder Pack', amount: 999900, months: 36, price_per_month: 277.0, tagline: '3 saal ka jhanjhat khatam' },
+  lifetime: { label: '3-Year Founder Pack', amount: 999900, months: 36, price_per_month: 277.0, tagline: '3 years, zero renewal hassle' },
 };
 
 app.get('/api/billing/plans', (req, res) => {
