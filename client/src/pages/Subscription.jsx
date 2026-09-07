@@ -78,7 +78,7 @@ export default function Subscription() {
   const [plans, setPlans] = useState([]);
   const [gateway, setGateway] = useState('not_configured');
   const [selectedPlan, setSelectedPlan] = useState('pro-yearly');
-  const [expanded, setExpanded] = useState({});
+  const [expanded, setExpanded] = useState({ starter: true, pro: true, elite: true });
   const [loading, setLoading] = useState(true);
   const [paying, setPaying] = useState(false);
   const [snack, setSnack] = useState(null);
@@ -228,7 +228,7 @@ export default function Subscription() {
         </ToggleButtonGroup>
       </Stack>
 
-      <Grid container spacing={2}>
+      <Grid container spacing={2} alignItems="flex-start">
         {['starter', 'pro', 'elite'].map((tier) => {
           const monthly = planFor(tier, 1);
           const yearly = planFor(tier, 12);
@@ -240,7 +240,7 @@ export default function Subscription() {
             <Grid item xs={12} sm={4} key={tier}>
               <Paper
                 sx={{
-                  p: 2.5, height: '100%', position: 'relative',
+                  p: 2.5, height: 'auto', position: 'relative',
                   border: selectedPlan === shown?.id ? '2px solid #0b695c' : '1px solid #e0e6e4',
                   ...(isPro && selectedPlan !== shown?.id ? { borderColor: '#0b695c', borderWidth: 1 } : {}),
                 }}
