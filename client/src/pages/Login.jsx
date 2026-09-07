@@ -2,12 +2,14 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Box, Card, CardContent, Typography, TextField, Button, InputAdornment,
-  Avatar, Alert,
+  Avatar, Alert, IconButton,
 } from '@mui/material';
 import LocalPharmacyIcon from '@mui/icons-material/LocalPharmacy';
 import PersonIcon from '@mui/icons-material/Person';
 import LockIcon from '@mui/icons-material/Lock';
 import LoginIcon from '@mui/icons-material/Login';
+import VisibilityIcon from '@mui/icons-material/Visibility';
+import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import { api } from '../api';
 import { useAuth } from '../auth';
 
@@ -16,6 +18,7 @@ export default function Login() {
   const navigate = useNavigate();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const expired = new URLSearchParams(window.location.search).get('expired') === '1';
@@ -69,9 +72,22 @@ export default function Login() {
               sx={{ mb: 2 }}
             />
             <TextField
-              label="Password" type="password" fullWidth required
+              label="Password" type={showPassword ? 'text' : 'password'} fullWidth required
               value={password} onChange={(e) => setPassword(e.target.value)}
-              InputProps={{ startAdornment: (<InputAdornment position="start"><LockIcon /></InputAdornment>) }}
+              InputProps={{
+                startAdornment: (<InputAdornment position="start"><LockIcon /></InputAdornment>),
+                endAdornment: (
+                  <InputAdornment position="end">
+                    <IconButton
+                      onClick={() => setShowPassword(!showPassword)}
+                      edge="end"
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    >
+                      {showPassword ? <VisibilityOffIcon /> : <VisibilityIcon />}
+                    </IconButton>
+                  </InputAdornment>
+                ),
+              }}
               sx={{ mb: 3 }}
             />
             <Button type="submit" variant="contained" size="large" fullWidth startIcon={<LoginIcon />} disabled={busy}>
