@@ -43,16 +43,33 @@ const FEATURE_ROWS = [
 const inr = (paise) => '₹' + (paise / 100).toLocaleString('en-IN');
 
 const TIER_ORDER = ['starter', 'pro', 'elite'];
-// Features a tier ADDS on top of the one below — the card only lists the new
-// stuff, everything from lower tiers is inherited and stated in one line.
+// Features a tier ADDS on top of the one below. Elite shows ALL features
+// so the flagship card is fully packed with every feature listed.
 const addedFeatures = (tier) => {
+  if (tier === 'elite') {
+    return [
+      { label: 'Camera invoice scanner (Smart AI)' },
+      { label: 'WhatsApp daily business summary' },
+      { label: 'Khata (Credit / Udhaar book)' },
+      { label: 'WhatsApp bill sending' },
+      { label: 'Full sales & profit reports' },
+      { label: 'Excel & CSV data import' },
+      { label: 'Unlimited staff accounts' },
+      { label: 'Billing & GST invoices' },
+      { label: 'Medicines, stock & expiry alerts' },
+      { label: 'Purchases & real-time dashboard' },
+    ];
+  }
   const idx = TIER_ORDER.indexOf(tier);
   const inherited = idx > 0
     ? new Set(FEATURE_ROWS.filter((r) => r.tiers.includes(TIER_ORDER[idx - 1])).map((r) => r.label))
     : new Set();
   return FEATURE_ROWS.filter((r) => r.tiers.includes(tier) && !inherited.has(r.label));
 };
-const INHERITS_LINE = { pro: 'Everything in Starter, plus:', elite: 'Everything in Pro, plus:' };
+const INHERITS_LINE = {
+  pro: 'Everything in Starter, plus:',
+  elite: '⭐ Complete All-in-One Package — All Features Unlocked:',
+};
 
 export default function Subscription() {
   const locked = new URLSearchParams(window.location.search).get('locked') === '1';
