@@ -1970,7 +1970,7 @@ app.post('/api/founder/tenants', requireAuth, requirePlatformAdmin, async (req, 
 
     // Build ready-to-send WhatsApp onboarding text for the client
     const cleanPhone = String(phone).replace(/[^\d]/g, '');
-    const loginUrl = 'https://medistock-app.vercel.app';
+    const loginUrl = 'https://medistock-pharma.vercel.app';
     const waText = encodeURIComponent(
       `🏥 *Namaste ${owner_name}! Welcome to MediStock Pharmacy Software.*\n\n` +
       `Aapka medical store *${store_name}* setup ho gaya hai!\n\n` +
@@ -2090,7 +2090,7 @@ app.post('/api/founder/tenants/:id/impersonate', requireAuth, requirePlatformAdm
     res.json({
       token,
       tenant,
-      redirectUrl: 'https://medistock-app.vercel.app/#impersonate_token=' + token,
+      redirectUrl: 'https://medistock-pharma.vercel.app/#impersonate_token=' + token,
     });
   } catch (e) { next(e); }
 });
