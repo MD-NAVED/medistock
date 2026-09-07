@@ -9,7 +9,7 @@ export const FEATURE_MIN_TIER = {
   whatsapp_bill: 'pro',
   import: 'pro',
   reports: 'pro',
-  staff_unlimited: 'pro',
+  staff_unlimited: 'elite',
   scanner: 'elite',
   whatsapp_summary: 'elite',
 };

@@ -267,7 +267,7 @@ const FEATURE_MIN_TIER = {
   whatsapp_bill: 'pro',     // WhatsApp bill sharing after checkout
   import: 'pro',            // Excel/CSV import wizard
   reports: 'pro',           // full sales/purchase reports
-  staff_unlimited: 'pro',   // Starter is capped at 3 accounts (owner + 2 staff)
+  staff_unlimited: 'elite', // Starter = 3 staff (4 total), Pro = 5 staff (6 total), Elite = Unlimited
   scanner: 'elite',         // camera invoice scanner
   whatsapp_summary: 'elite' // daily WhatsApp business summary
 };
@@ -1581,14 +1581,19 @@ app.post('/api/users', requireAuth, requireOwner, async (req, res, next) => {
     if (!username?.trim() || !password || !name?.trim()) return bad(res, 400, 'Name, username and password are required');
     if (String(password).length < 5) return bad(res, 400, 'Password must be at least 5 characters');
     if (!['owner', 'employee'].includes(role)) return bad(res, 400, 'Invalid role');
-    // Starter stores are capped at 3 accounts (owner + 2 staff). Existing
-    // accounts from a higher plan keep working — only new additions are blocked.
-    if (!tierAllows(req.tier, 'staff_unlimited')) {
+    // Staff limits: Starter = 3 staff (4 accounts total), Pro = 5 staff (6 accounts total), Elite = Unlimited.
+    // Existing accounts from a higher plan keep working — only new additions are blocked.
+    const STAFF_ACCOUNT_LIMIT = { starter: 4, pro: 6 };
+    const limit = STAFF_ACCOUNT_LIMIT[req.tier];
+    if (limit) {
       const c = (await pool.query('SELECT COUNT(*)::int AS c FROM users WHERE store_id = $1 AND active = 1', [req.storeId])).rows[0].c;
-      if (c >= 3) {
+      if (c >= limit) {
+        const staffCount = limit - 1;
+        const nextTier = req.tier === 'starter' ? 'Pro (5 staff)' : 'Elite (Unlimited staff)';
+        const reqTier = req.tier === 'starter' ? 'pro' : 'elite';
         return res.status(402).json({
-          error: 'The Starter plan allows up to 3 accounts (owner + 2 staff). Upgrade to Pro for unlimited staff accounts.',
-          code: 'feature_locked', feature: 'staff_unlimited', required_tier: 'pro',
+          error: `Your current ${req.tier.toUpperCase()} plan allows up to ${staffCount} staff accounts. Upgrade to ${nextTier} to add more staff logins.`,
+          code: 'feature_locked', feature: 'staff_unlimited', required_tier: reqTier,
         });
       }
     }
