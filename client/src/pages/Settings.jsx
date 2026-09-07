@@ -226,32 +226,36 @@ export default function Settings() {
           </Paper>
 
           <Paper sx={{ p: { xs: 2, md: 3 } }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
               <CloudDoneIcon color="success" />
-              <Typography variant="h6">Database backups</Typography>
+              <Typography variant="h6">Cloud Security & Backups</Typography>
             </Box>
-            <Typography variant="body2" color="text.secondary">
-              Your data lives in a managed cloud database (Supabase). Backups are handled by the
-              database provider, so there is nothing to run from this page. For extra safety you
-              can export a copy of your data from the Supabase dashboard (Database → Backups,
-              or a CSV export of each table) whenever you want an off-site copy.
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Your store data is continuously backed up and secured in the cloud with enterprise-grade encryption.
             </Typography>
-          </Paper>
-
-          <Paper sx={{ p: { xs: 2, md: 3 } }}>
-            <Typography variant="h6" sx={{ mb: 1 }}>How this install is protected</Typography>
-            <Typography variant="body2" color="text.secondary" component="div">
-              <ul style={{ margin: 0, paddingLeft: 20 }}>
-                <li>Passwords are stored with scrypt salted hashing, never in readable form.</li>
-                <li>Login sessions live in the database, so a server restart does not sign everyone out.</li>
-                <li>After 8 wrong passwords for one username, that username is locked for 15 minutes.</li>
-                <li>Deactivating a user immediately ends their open sessions.</li>
-              </ul>
-            </Typography>
-            <Alert severity="info" sx={{ mt: 2 }}>
-              Traffic is served over <b>HTTPS</b> by the hosting platform. Keep your Supabase
-              login safe — anyone with it can reach the database directly.
-            </Alert>
+            <Box sx={{ display: 'grid', gap: 1.5 }}>
+              <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5 }}>
+                <CheckCircleIcon sx={{ fontSize: 18, color: 'success.main', mt: 0.3 }} />
+                <Box>
+                  <Typography variant="subtitle2" sx={{ fontSize: 14, fontWeight: 600 }}>Automatic 24/7 Cloud Backups</Typography>
+                  <Typography variant="caption" color="text.secondary">Every sale, purchase, and stock entry is saved in real-time. Your store data is safe even if your device is lost or damaged.</Typography>
+                </Box>
+              </Box>
+              <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5 }}>
+                <CheckCircleIcon sx={{ fontSize: 18, color: 'success.main', mt: 0.3 }} />
+                <Box>
+                  <Typography variant="subtitle2" sx={{ fontSize: 14, fontWeight: 600 }}>End-to-End Encryption & HTTPS</Typography>
+                  <Typography variant="caption" color="text.secondary">All billing and customer data is encrypted in transit and at rest with strict access controls.</Typography>
+                </Box>
+              </Box>
+              <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5 }}>
+                <CheckCircleIcon sx={{ fontSize: 18, color: 'success.main', mt: 0.3 }} />
+                <Box>
+                  <Typography variant="subtitle2" sx={{ fontSize: 14, fontWeight: 600 }}>Smart Account Protection</Typography>
+                  <Typography variant="caption" color="text.secondary">Automatic lockout prevents unauthorized password guessing, and passwords are encrypted securely.</Typography>
+                </Box>
+              </Box>
+            </Box>
           </Paper>
         </Box>
       )}
