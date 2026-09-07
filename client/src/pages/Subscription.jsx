@@ -305,17 +305,10 @@ export default function Subscription() {
       <Button
         fullWidth size="large" variant="contained" onClick={payNow}
         disabled={paying || gateway !== 'razorpay' || !selected}
-        sx={{ mt: 3, py: 1.6, fontWeight: 700, fontSize: 16 }}
+        sx={{ mt: 3, mb: 2, py: 1.6, fontWeight: 700, fontSize: 16 }}
       >
         {paying ? 'Opening secure checkout…' : `🔒 Continue with ${selected?.label || 'Pro'} — ${selected ? inr(selected.amount) : ''}`}
       </Button>
-
-      <Divider sx={{ my: 3 }} />
-      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} justifyContent="center">
-        {['PCI-DSS Secure Checkout', 'Auto activation on payment', 'Data stays in cloud backup', 'Upgrade or downgrade anytime'].map((t) => (
-          <Chip key={t} size="small" icon={<CheckCircleIcon />} label={t} variant="outlined" />
-        ))}
-      </Stack>
 
       <Snackbar
         open={!!snack} autoHideDuration={6000} onClose={() => setSnack(null)}
