@@ -7,6 +7,8 @@ import {
 } from '@mui/material';
 import AddShoppingCartIcon from '@mui/icons-material/AddShoppingCart';
 import DeleteIcon from '@mui/icons-material/Delete';
+import AddIcon from '@mui/icons-material/Add';
+import RemoveIcon from '@mui/icons-material/Remove';
 import PointOfSaleIcon from '@mui/icons-material/PointOfSale';
 import WhatsAppIcon from '@mui/icons-material/WhatsApp';
 import PrintIcon from '@mui/icons-material/Print';
@@ -147,7 +149,7 @@ export default function Billing() {
   };
 
   return (
-    <Box>
+    <Box sx={{ pb: { xs: cart.length > 0 ? 10 : 2, md: 0 } }}>
       <Typography variant="h5" sx={{ mb: { xs: 2, md: 3 }, fontSize: { xs: 20, md: 24 } }}>
         Billing — New Sale
       </Typography>
@@ -196,7 +198,7 @@ export default function Billing() {
           </Box>
 
           {isMobile ? (
-            /* Mobile: cart items as stacked cards — no sideways scrolling */
+            /* Mobile: compact list rows with stepper — fast billing for 10+ items */
             <Box sx={{ mt: 2 }}>
               {cart.length === 0 && (
                 <Typography color="text.secondary" sx={{ py: 3, textAlign: 'center' }}>
@@ -204,37 +206,63 @@ export default function Billing() {
                 </Typography>
               )}
               {cart.map((c) => (
-                <Paper key={c.id} variant="outlined" sx={{ p: 1.8, mb: 1.5, bgcolor: '#fafbfb' }}>
-                  <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
-                    <MedicineLogo src={c.logo_url} text={c.company || c.name} />
-                    <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-                      <Typography sx={{ fontSize: 14, fontWeight: 700, lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</Typography>
-                      <Typography variant="caption" color="text.secondary" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {c.company} · {fmt(c.price)} each{gstOn ? ` · GST ${c.gst_rate}%` : ''}
-                      </Typography>
+                <Paper key={c.id} variant="outlined" sx={{ p: 1.2, mb: 1, bgcolor: '#fafbfb', borderRadius: 2 }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0, flexGrow: 1 }}>
+                      <MedicineLogo src={c.logo_url} text={c.company || c.name} />
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography sx={{ fontSize: 13, fontWeight: 700, lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {c.name}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontSize: 11 }}>
+                          {c.company} · {fmt(c.price)} {gstOn ? `(+${c.gst_rate}% GST)` : ''}
+                        </Typography>
+                      </Box>
                     </Box>
-                    <IconButton size="small" color="error" onClick={() => setCart(cart.filter((x) => x.id !== c.id))} aria-label={'Remove ' + c.name}>
-                      <DeleteIcon fontSize="small" />
-                    </IconButton>
-                  </Box>
-                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 1.5 }}>
-                    <TextField
-                      size="small" type="number" label="Qty" value={c.qty}
-                      inputProps={{ min: 1, max: c.stock }}
-                      onChange={(e) => {
-                        const v = Math.max(1, Math.min(c.stock, Number(e.target.value) || 1));
-                        setCart(cart.map((x) => (x.id === c.id ? { ...x, qty: v } : x)));
-                      }}
-                      sx={{ width: 96 }}
-                    />
-                    <Box sx={{ textAlign: 'right' }}>
-                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Line total</Typography>
-                      <Typography sx={{ fontWeight: 800, fontSize: 16 }}>
+                    <Box sx={{ textAlign: 'right', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                      <Typography sx={{ fontWeight: 800, fontSize: 14, color: 'text.primary' }}>
                         {fmt(c.qty * c.price * (gstOn ? 1 + c.gst_rate / 100 : 1))}
                       </Typography>
+                      <IconButton size="small" color="error" onClick={() => setCart(cart.filter((x) => x.id !== c.id))} sx={{ p: 0.4 }}>
+                        <DeleteIcon sx={{ fontSize: 18 }} />
+                      </IconButton>
                     </Box>
                   </Box>
-                  <Typography variant="caption" color="text.secondary">in stock: {c.stock}</Typography>
+
+                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 0.8, pt: 0.6, borderTop: '1px dashed #e4ebe9' }}>
+                    <Typography variant="caption" color={c.stock <= 5 ? 'error.main' : 'text.secondary'} sx={{ fontSize: 11, fontWeight: c.stock <= 5 ? 600 : 400 }}>
+                      In stock: {c.stock} {c.stock <= 5 ? '⚠️ Low' : ''}
+                    </Typography>
+                    <Box sx={{ display: 'inline-flex', alignItems: 'center', bgcolor: '#eef5f3', borderRadius: 1.5, border: '1px solid #d0e2dd' }}>
+                      <IconButton
+                        size="small"
+                        disabled={c.qty <= 1}
+                        onClick={() => setCart(cart.map((x) => (x.id === c.id ? { ...x, qty: Math.max(1, x.qty - 1) } : x)))}
+                        sx={{ p: 0.3 }}
+                      >
+                        <RemoveIcon sx={{ fontSize: 14 }} />
+                      </IconButton>
+                      <TextField
+                        variant="standard"
+                        type="number"
+                        value={c.qty}
+                        onChange={(e) => {
+                          const v = Math.max(1, Math.min(c.stock, Number(e.target.value) || 1));
+                          setCart(cart.map((x) => (x.id === c.id ? { ...x, qty: v } : x)));
+                        }}
+                        inputProps={{ min: 1, max: c.stock, style: { textAlign: 'center', padding: '1px 0', fontSize: 12, fontWeight: 700, width: 28 } }}
+                        InputProps={{ disableUnderline: true }}
+                      />
+                      <IconButton
+                        size="small"
+                        disabled={c.qty >= c.stock}
+                        onClick={() => setCart(cart.map((x) => (x.id === c.id ? { ...x, qty: Math.min(c.stock, x.qty + 1) } : x)))}
+                        sx={{ p: 0.3 }}
+                      >
+                        <AddIcon sx={{ fontSize: 14 }} />
+                      </IconButton>
+                    </Box>
+                  </Box>
                 </Paper>
               ))}
             </Box>
@@ -289,7 +317,7 @@ export default function Billing() {
         </Paper>
 
         {/* RIGHT: summary */}
-        <Paper sx={{ p: { xs: 2, md: 3 }, width: { xs: '100%', md: 330 }, position: { xs: 'static', md: 'sticky' }, top: 90 }}>
+        <Paper id="bill-summary-card" sx={{ p: { xs: 2, md: 3 }, width: { xs: '100%', md: 330 }, position: { xs: 'static', md: 'sticky' }, top: 90 }}>
           <Typography variant="h6" sx={{ mb: 2 }}>Bill Summary</Typography>
           <TextField label="Customer name (optional)" size="small" fullWidth value={customer} onChange={(e) => setCustomer(e.target.value)} sx={{ mb: 1.5 }} />
           <TextField label="WhatsApp number (optional)" size="small" fullWidth value={phone}
@@ -339,6 +367,59 @@ export default function Billing() {
           <Chip size="small" color="info" variant="outlined" label="FEFO: soonest-expiry batch sold first" sx={{ mt: 2 }} />
         </Paper>
       </Box>
+
+      {/* Mobile Sticky Quick-Checkout Floating Bar */}
+      {isMobile && cart.length > 0 && (
+        <Paper
+          elevation={6}
+          sx={{
+            position: 'fixed',
+            bottom: 0,
+            left: 0,
+            right: 0,
+            p: 1.5,
+            px: 2,
+            zIndex: 1000,
+            bgcolor: '#004d40',
+            color: '#fff',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            borderTop: '2px solid #00695c',
+            boxShadow: '0 -4px 20px rgba(0,0,0,0.2)',
+          }}
+        >
+          <Box sx={{ minWidth: 0, flexGrow: 1, pr: 1.5 }}>
+            <Typography sx={{ fontSize: 11, opacity: 0.85 }}>
+              {cart.reduce((s, c) => s + c.qty, 0)} items in bill
+            </Typography>
+            <Typography sx={{ fontWeight: 800, fontSize: 18, color: '#80cbc4', lineHeight: 1.1 }}>
+              {fmt(totals.total)}
+            </Typography>
+          </Box>
+          <Button
+            variant="contained"
+            onClick={() => {
+              const el = document.getElementById('bill-summary-card');
+              if (el) el.scrollIntoView({ behavior: 'smooth' });
+            }}
+            sx={{
+              bgcolor: '#00897b',
+              '&:hover': { bgcolor: '#00796b' },
+              fontWeight: 800,
+              fontSize: 14,
+              px: 2.5,
+              py: 1,
+              borderRadius: 2,
+              textTransform: 'none',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            Checkout ➔
+          </Button>
+        </Paper>
+      )}
 
       {/* Invoice success dialog */}
       <Dialog open={!!invoice} onClose={() => setInvoice(null)} maxWidth="xs" fullWidth>
