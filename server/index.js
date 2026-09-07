@@ -2130,7 +2130,7 @@ const BILLING_PLANS = {
   'pro-yearly': { tier: 'pro', label: 'Pro — Yearly (Best Value)', amount: 499900, months: 12, price_per_month: 416.0, tagline: '2 months free + priority support' },
   'elite-monthly': { tier: 'elite', label: 'Elite — Monthly', amount: 99900, months: 1, price_per_month: 999.0, tagline: 'Scanner + WhatsApp daily summary' },
   'elite-yearly': { tier: 'elite', label: 'Elite — Yearly', amount: 799900, months: 12, price_per_month: 666.0, tagline: 'Full power at the best Elite price' },
-  'elite-3yr': { tier: 'elite', label: 'Founder Pack — 3 Years', amount: 999900, months: 36, price_per_month: 277.0, tagline: 'Launch offer: 3 years of Elite' },
+  'elite-3yr': { tier: 'elite', label: 'Founder Pack — 3 Years', amount: 1499900, months: 36, price_per_month: 416.0, tagline: 'Launch offer: 3 years of Elite (Save ₹9,000)' },
 };
 // Legacy plan ids sent by older app builds already in the field map onto the
 // closest new SKU so those clients keep renewing correctly.
