@@ -1,9 +1,5 @@
 {
   "appId": "com.medistock.app",
   "appName": "MediStock",
-  "webDir": "dist",
-  "server": {
-    "url": "https://medistock-pharma.vercel.app",
-    "cleartext": true
-  }
+  "webDir": "dist"
 }
