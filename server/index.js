@@ -197,6 +197,40 @@ function ensureSchema() {
       await pool.query("UPDATE tenants SET tier = 'elite' WHERE plan = 'lifetime' AND tier = 'starter'");
       await pool.query("UPDATE tenants SET tier = 'pro' WHERE plan IN ('monthly', 'yearly') AND tier = 'starter'");
       await pool.query("UPDATE tenants SET tier = 'elite' WHERE status = 'trial' AND tier = 'starter'");
+
+      // Refer & Earn ecosystem columns & ledger
+      await pool.query('ALTER TABLE tenants ADD COLUMN IF NOT EXISTS referral_code VARCHAR(50)');
+      await pool.query('ALTER TABLE tenants ADD COLUMN IF NOT EXISTS referred_by_tenant_id INTEGER REFERENCES tenants(id) ON DELETE SET NULL');
+      await pool.query('ALTER TABLE tenants ADD COLUMN IF NOT EXISTS referral_wallet_balance NUMERIC(10, 2) NOT NULL DEFAULT 0.00');
+      await pool.query('ALTER TABLE tenants ADD COLUMN IF NOT EXISTS referral_total_earned NUMERIC(10, 2) NOT NULL DEFAULT 0.00');
+      await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS idx_tenants_referral_code ON tenants(referral_code)');
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS referral_transactions (
+          id SERIAL PRIMARY KEY,
+          tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+          referred_tenant_id INTEGER REFERENCES tenants(id) ON DELETE SET NULL,
+          type VARCHAR(30) NOT NULL,
+          amount NUMERIC(10, 2) NOT NULL,
+          plan_id VARCHAR(50),
+          plan_amount NUMERIC(10, 2),
+          upi_id VARCHAR(100),
+          status VARCHAR(30) NOT NULL DEFAULT 'completed',
+          note TEXT,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_ref_tx_tenant ON referral_transactions(tenant_id)');
+
+      const noCodes = (await pool.query('SELECT id, store_name FROM tenants WHERE referral_code IS NULL')).rows;
+      for (const t of noCodes) {
+        const clean = String(t.store_name || 'STORE')
+          .toUpperCase()
+          .replace(/[^A-Z0-9]/g, '')
+          .slice(0, 6) || 'MEDI';
+        const code = `${clean}${t.id}`;
+        await pool.query('UPDATE tenants SET referral_code = $1 WHERE id = $2', [code, t.id]);
+      }
     })().catch((e) => { schemaReadyPromise = null; throw e; });
   }
   return schemaReadyPromise;
@@ -308,7 +342,7 @@ function recentFailures(username) {
 app.post('/api/auth/signup', async (req, res, next) => {
   try {
     await ensureSchema();
-    const { store_name, name, username, password, phone } = req.body || {};
+    const { store_name, name, username, password, phone, referral_code } = req.body || {};
     if (!store_name?.trim() || !username?.trim() || !password || !name?.trim()) {
       return bad(res, 400, 'Store name, owner name, username and password are required');
     }
@@ -322,13 +356,33 @@ app.post('/api/auth/signup', async (req, res, next) => {
       return bad(res, 409, 'That username is already taken');
     }
 
-    // 1. Create the store (tenant) with a 14-day trial.
+    // Optional referral code: if valid, grant bonus 7 days (21-day trial) and link referrer
+    const refCode = String(referral_code || '').trim().toUpperCase();
+    let referrerTenantId = null;
+    let trialDays = 14;
+    if (refCode) {
+      const refRow = (await pool.query('SELECT id FROM tenants WHERE UPPER(referral_code) = $1', [refCode])).rows[0];
+      if (refRow) {
+        referrerTenantId = refRow.id;
+        trialDays = 21; // Bonus trial days for using referral code!
+      }
+    }
+
+    // 1. Create the store (tenant) with trial (14 days, or 21 with referral).
     const tid = (await pool.query(
-      `INSERT INTO tenants (store_name, owner_name, phone, plan, status, tier, trial_ends_at)
-       VALUES ($1, $2, $3, 'trial', 'trial', 'elite', now() + interval '14 days')
+      `INSERT INTO tenants (store_name, owner_name, phone, plan, status, tier, trial_ends_at, referred_by_tenant_id)
+       VALUES ($1, $2, $3, 'trial', 'trial', 'elite', now() + make_interval(days => $4::int), $5)
        RETURNING id`,
-      [String(store_name).trim().slice(0, 200), String(name).trim().slice(0, 200), String(phone || '').trim().slice(0, 30)]
+      [String(store_name).trim().slice(0, 200), String(name).trim().slice(0, 200), String(phone || '').trim().slice(0, 30), trialDays, referrerTenantId]
     )).rows[0].id;
+
+    // Generate unique referral code for the new store
+    const cleanPrefix = String(store_name || 'STORE')
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, '')
+      .slice(0, 6) || 'MEDI';
+    const myCode = `${cleanPrefix}${tid}`;
+    await pool.query('UPDATE tenants SET referral_code = $1 WHERE id = $2', [myCode, tid]);
 
     // 2. Give the store its own settings row (bill header uses it).
     await pool.query(
@@ -2210,6 +2264,38 @@ async function handlePaymentSuccess(orderId, paymentId, signature, method) {
     // idempotent-ish: only extend the subscription the first time
     const purchased = BILLING_PLANS[pr.plan];
     await activateTenantSubscription(pr.tenant_id, pr.months, purchased?.tier, purchased?.price_per_month);
+
+    // Referral Commission Auto-Credit:
+    try {
+      const tenant = (await pool.query('SELECT store_name, referred_by_tenant_id FROM tenants WHERE id = $1', [pr.tenant_id])).rows[0];
+      if (tenant && tenant.referred_by_tenant_id && purchased) {
+        // 15% commission of plan amount (e.g. ₹4,999 -> ₹750, ₹14,999 -> ₹2,250)
+        const commissionAmount = Math.round((purchased.amount / 100) * 0.15);
+        if (commissionAmount > 0) {
+          await pool.query(
+            `INSERT INTO referral_transactions (tenant_id, referred_tenant_id, type, amount, plan_id, plan_amount, status, note)
+             VALUES ($1, $2, 'reward_earned', $3, $4, $5, 'completed', $6)`,
+            [
+              tenant.referred_by_tenant_id,
+              pr.tenant_id,
+              commissionAmount,
+              pr.plan,
+              purchased.amount / 100,
+              `Commission (15%) for ${tenant.store_name} subscribing to ${purchased.label}`,
+            ]
+          );
+          await pool.query(
+            `UPDATE tenants
+             SET referral_wallet_balance = referral_wallet_balance + $1,
+                 referral_total_earned = referral_total_earned + $1
+             WHERE id = $2`,
+            [commissionAmount, tenant.referred_by_tenant_id]
+          );
+        }
+      }
+    } catch (refErr) {
+      console.error('Referral credit error:', refErr.message);
+    }
   }
   return pr;
 }
@@ -2357,6 +2443,210 @@ app.get('/api/founder/payments', requireAuth, requirePlatformAdmin, async (req, 
        ORDER BY p.id DESC LIMIT 100`
     );
     res.json(rows);
+  } catch (e) { next(e); }
+});
+
+// ---------------------------------------------------------------------------
+// Refer & Earn Ecosystem Endpoints
+// ---------------------------------------------------------------------------
+
+// Public check for referral code during signup
+app.get('/api/public/referral-check', async (req, res, next) => {
+  try {
+    await ensureSchema();
+    const code = String(req.query.code || '').trim().toUpperCase();
+    if (!code) return res.json({ valid: false });
+    const row = (await pool.query('SELECT store_name FROM tenants WHERE UPPER(referral_code) = $1', [code])).rows[0];
+    if (row) {
+      res.json({ valid: true, store_name: row.store_name, bonus_trial_days: 21 });
+    } else {
+      res.json({ valid: false });
+    }
+  } catch (e) { next(e); }
+});
+
+// Referrer dashboard summary: wallet balance, referred stores list, transactions
+app.get('/api/referrals/summary', requireAuth, async (req, res, next) => {
+  try {
+    const tenant = (await pool.query(
+      'SELECT id, store_name, referral_code, referral_wallet_balance::float8 AS wallet_balance, referral_total_earned::float8 AS total_earned FROM tenants WHERE id = $1',
+      [req.storeId]
+    )).rows[0];
+    if (!tenant) return bad(res, 404, 'Tenant not found');
+
+    const referredStores = (await pool.query(
+      `SELECT t.id, t.store_name, t.owner_name, t.city, t.status, t.tier, t.plan, t.created_at,
+              COALESCE(SUM(rt.amount), 0)::float8 AS total_commission_earned
+       FROM tenants t
+       LEFT JOIN referral_transactions rt ON rt.referred_tenant_id = t.id AND rt.type = 'reward_earned'
+       WHERE t.referred_by_tenant_id = $1
+       GROUP BY t.id
+       ORDER BY t.id DESC`,
+      [tenant.id]
+    )).rows;
+
+    const transactions = (await pool.query(
+      `SELECT rt.id, rt.type, rt.amount::float8, rt.plan_id, rt.plan_amount::float8, rt.upi_id, rt.status, rt.note, rt.created_at,
+              t.store_name AS referred_store_name
+       FROM referral_transactions rt
+       LEFT JOIN tenants t ON t.id = rt.referred_tenant_id
+       WHERE rt.tenant_id = $1
+       ORDER BY rt.id DESC LIMIT 50`,
+      [tenant.id]
+    )).rows;
+
+    const activePaidCount = referredStores.filter(s => s.status === 'active').length;
+
+    res.json({
+      referral_code: tenant.referral_code,
+      referral_link: `https://medistock-pharma.vercel.app/signup?ref=${tenant.referral_code}`,
+      wallet_balance: tenant.wallet_balance || 0,
+      total_earned: tenant.total_earned || 0,
+      referred_count: referredStores.length,
+      paid_count: activePaidCount,
+      referred_stores: referredStores,
+      transactions,
+    });
+  } catch (e) { next(e); }
+});
+
+// Redeem wallet balance for Free Subscription Days (1 month = ₹250 conversion value, or pro-rated)
+app.post('/api/referrals/redeem-extension', requireAuth, async (req, res, next) => {
+  try {
+    const amount = Number(req.body?.amount);
+    if (!Number.isFinite(amount) || amount < 50) {
+      return bad(res, 400, 'Minimum redemption is ₹50');
+    }
+
+    const tenant = (await pool.query('SELECT id, referral_wallet_balance::float8 AS balance, subscription_ends_at FROM tenants WHERE id = $1', [req.storeId])).rows[0];
+    if (!tenant) return bad(res, 404, 'Tenant not found');
+
+    if (tenant.balance < amount) {
+      return bad(res, 400, `Insufficient wallet balance (Available: ₹${tenant.balance.toFixed(2)})`);
+    }
+
+    // ₹250 = 30 days extension (or ~8.33 rupees per day)
+    const daysToAdd = Math.max(1, Math.round((amount / 250) * 30));
+
+    // Deduct wallet balance
+    await pool.query('UPDATE tenants SET referral_wallet_balance = referral_wallet_balance - $1 WHERE id = $2', [amount, tenant.id]);
+
+    // Extend subscription and activate
+    await pool.query(
+      `UPDATE tenants
+       SET status = 'active',
+           subscription_ends_at = GREATEST(COALESCE(subscription_ends_at, now()), now()) + make_interval(days => $1::int)
+       WHERE id = $2`,
+      [daysToAdd, tenant.id]
+    );
+
+    // Record transaction
+    await pool.query(
+      `INSERT INTO referral_transactions (tenant_id, type, amount, status, note)
+       VALUES ($1, 'redeem_extension', $2, 'completed', $3)`,
+      [tenant.id, amount, `Redeemed ₹${amount} for ${daysToAdd} days free subscription extension`]
+    );
+
+    res.json({ ok: true, days_added: daysToAdd, redeemed_amount: amount });
+  } catch (e) { next(e); }
+});
+
+// Request UPI Cash Payout
+app.post('/api/referrals/request-payout', requireAuth, async (req, res, next) => {
+  try {
+    const amount = Number(req.body?.amount);
+    const upiId = String(req.body?.upi_id || '').trim();
+
+    if (!upiId || !upiId.includes('@')) {
+      return bad(res, 400, 'Please enter a valid UPI ID (e.g. mobile@upi or name@okaxis)');
+    }
+    if (!Number.isFinite(amount) || amount < 100) {
+      return bad(res, 400, 'Minimum UPI payout amount is ₹100');
+    }
+
+    const tenant = (await pool.query('SELECT id, store_name, referral_wallet_balance::float8 AS balance FROM tenants WHERE id = $1', [req.storeId])).rows[0];
+    if (!tenant) return bad(res, 404, 'Tenant not found');
+
+    if (tenant.balance < amount) {
+      return bad(res, 400, `Insufficient wallet balance (Available: ₹${tenant.balance.toFixed(2)})`);
+    }
+
+    // Deduct balance
+    await pool.query('UPDATE tenants SET referral_wallet_balance = referral_wallet_balance - $1 WHERE id = $2', [amount, tenant.id]);
+
+    // Create pending payout transaction
+    const { rows } = await pool.query(
+      `INSERT INTO referral_transactions (tenant_id, type, amount, upi_id, status, note)
+       VALUES ($1, 'payout_upi', $2, $3, 'pending', $4)
+       RETURNING id`,
+      [tenant.id, amount, upiId, `Payout request of ₹${amount} to ${upiId} (${tenant.store_name})`]
+    );
+
+    res.json({
+      ok: true,
+      transaction_id: rows[0].id,
+      message: `Payout request of ₹${amount} submitted! It will be transferred to ${upiId} within 24 hours.`,
+    });
+  } catch (e) { next(e); }
+});
+
+// Founder panel: list all referral activities & pending payout requests
+app.get('/api/founder/referrals', requireAuth, requirePlatformAdmin, async (req, res, next) => {
+  try {
+    const transactions = (await pool.query(
+      `SELECT rt.*, t.store_name, t.owner_name, t.phone, ref_t.store_name AS referred_store_name
+       FROM referral_transactions rt
+       JOIN tenants t ON t.id = rt.tenant_id
+       LEFT JOIN tenants ref_t ON ref_t.id = rt.referred_tenant_id
+       ORDER BY rt.id DESC LIMIT 100`
+    )).rows;
+
+    const pendingPayouts = (await pool.query(
+      `SELECT rt.*, t.store_name, t.owner_name, t.phone
+       FROM referral_transactions rt
+       JOIN tenants t ON t.id = rt.tenant_id
+       WHERE rt.type = 'payout_upi' AND rt.status = 'pending'
+       ORDER BY rt.id ASC`
+    )).rows;
+
+    const topReferrers = (await pool.query(
+      `SELECT t.id, t.store_name, t.owner_name, t.phone, t.referral_code, t.referral_wallet_balance::float8 AS wallet_balance,
+              t.referral_total_earned::float8 AS total_earned,
+              COUNT(ref_t.id)::int AS total_invited,
+              COUNT(ref_t.id) FILTER (WHERE ref_t.status = 'active')::int AS paid_stores
+       FROM tenants t
+       LEFT JOIN tenants ref_t ON ref_t.referred_by_tenant_id = t.id
+       GROUP BY t.id
+       HAVING COUNT(ref_t.id) > 0 OR t.referral_total_earned > 0
+       ORDER BY total_earned DESC, total_invited DESC LIMIT 20`
+    )).rows;
+
+    res.json({ transactions, pendingPayouts, topReferrers });
+  } catch (e) { next(e); }
+});
+
+// Founder panel: approve or reject a UPI payout request
+app.post('/api/founder/referrals/payouts/:id/action', requireAuth, requirePlatformAdmin, async (req, res, next) => {
+  try {
+    const id = asId(req.params.id);
+    const { action, utr_number, reason } = req.body || {};
+    const tx = (await pool.query('SELECT * FROM referral_transactions WHERE id = $1 AND type = \'payout_upi\'', [id])).rows[0];
+    if (!tx) return bad(res, 404, 'Payout transaction not found');
+    if (tx.status !== 'pending') return bad(res, 400, 'This payout is already ' + tx.status);
+
+    if (action === 'approve') {
+      const note = utr_number ? `Paid via UPI. UTR: ${String(utr_number).trim()}` : 'Paid via UPI by Admin';
+      await pool.query('UPDATE referral_transactions SET status = \'completed\', note = $1 WHERE id = $2', [note, id]);
+      res.json({ ok: true, status: 'completed' });
+    } else if (action === 'reject') {
+      // Refund balance back to tenant
+      await pool.query('UPDATE tenants SET referral_wallet_balance = referral_wallet_balance + $1 WHERE id = $2', [tx.amount, tx.tenant_id]);
+      const note = reason ? `Rejected: ${String(reason).trim()}` : 'Rejected by admin (refunded to wallet)';
+      await pool.query('UPDATE referral_transactions SET status = \'rejected\', note = $1 WHERE id = $2', [note, id]);
+      res.json({ ok: true, status: 'rejected' });
+    } else {
+      bad(res, 400, 'Invalid action (must be approve or reject)');
+    }
   } catch (e) { next(e); }
 });
 

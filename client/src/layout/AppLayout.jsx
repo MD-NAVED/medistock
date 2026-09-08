@@ -17,6 +17,7 @@ import BarChartIcon from '@mui/icons-material/BarChart';
 import SettingsIcon from '@mui/icons-material/Settings';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
 import WorkspacePremiumIcon from '@mui/icons-material/WorkspacePremium';
+import CardGiftcardIcon from '@mui/icons-material/CardGiftcard';
 import { api } from '../api';
 import { useAuth } from '../auth';
 
@@ -46,6 +47,7 @@ export default function AppLayout() {
     { label: 'Reports', icon: <BarChartIcon />, to: '/reports' },
     ...(user.role === 'owner' ? [{ label: 'Settings', icon: <SettingsIcon />, to: '/settings' }] : []),
     ...(user.role === 'owner' ? [{ label: 'Subscription', icon: <WorkspacePremiumIcon />, to: '/subscription' }] : []),
+    ...(user.role === 'owner' ? [{ label: 'Refer & Earn', icon: <CardGiftcardIcon sx={{ color: '#26a69a' }} />, to: '/referrals' }] : []),
   ];
 
   const doLogout = async () => {
