@@ -45,11 +45,13 @@ const istDay = (col) => `(${col} AT TIME ZONE 'Asia/Kolkata')::date`;
 const IST_TODAY = "(now() AT TIME ZONE 'Asia/Kolkata')::date";
 
 /* Shareable invoice links: an unguessable token per sale so customers can open
-   their bill without logging in. Derived from DATABASE_URL instead of stored —
-   rotating the database rotates old links, which is acceptable. */
-const INVOICE_SECRET = crypto.createHash('sha256')
-  .update(String(process.env.DATABASE_URL || '') + '|medistock-invoice-share')
-  .digest('hex');
+   their bill without logging in. Pinned to INVOICE_SHARE_SECRET so rotating
+   the database connection string does not invalidate active invoice links. */
+const INVOICE_SECRET = process.env.INVOICE_SHARE_SECRET;
+if (!INVOICE_SECRET) {
+  throw new Error('INVOICE_SHARE_SECRET env var is required. Generate via: ' +
+    'crypto.createHash("sha256").update(OLD_DATABASE_URL + "|medistock-invoice-share").digest("hex")');
+}
 function invoiceToken(saleId) {
   return crypto.createHmac('sha256', INVOICE_SECRET).update(String(saleId)).digest('hex').slice(0, 24);
 }
