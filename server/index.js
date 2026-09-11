@@ -261,6 +261,8 @@ function ensureSchema() {
         const code = `${clean}${t.id}`;
         await pool.query('UPDATE tenants SET referral_code = $1 WHERE id = $2', [code, t.id]);
       }
+
+      await ensureTenantPaymentsTable();
     })().catch((e) => { schemaReadyPromise = null; throw e; });
   }
   return schemaReadyPromise;
@@ -2255,14 +2257,31 @@ async function ensureTenantPaymentsTable() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
   `);
+
+  // Webhook event deduplication ledger
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS webhook_events (
+      event_id TEXT PRIMARY KEY,
+      event_type TEXT NOT NULL,
+      processed_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  // DB-level backstop: Prevent duplicate 'paid' records for the same razorpay_payment_id.
+  // Note on index creation: Non-concurrent execution during bootstrap/schema
+  // ensures table safety while keeping deployment simple.
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_tenant_payments_paid_once
+      ON tenant_payments(razorpay_payment_id) WHERE status = 'paid'
+  `);
 }
 ensureTenantPaymentsTable().catch(() => {});
 
 /** Mark a tenant paid: extend subscription from today (or from existing expiry
     if still valid, so renewals stack) and flip status to active. `tier` comes
     from the purchased SKU and upgrades/downgrades the store's feature tier. */
-async function activateTenantSubscription(tenantId, months, tier, pricePerMonth) {
-  const { rows } = await pool.query(
+async function activateTenantSubscription(tenantId, months, tier, pricePerMonth, dbClient = pool) {
+  const { rows } = await dbClient.query(
     `UPDATE tenants t
      SET status = 'active',
          plan = CASE WHEN $2::int >= 36 THEN 'lifetime' WHEN $2::int >= 12 THEN 'yearly' ELSE 'monthly' END,
@@ -2276,34 +2295,43 @@ async function activateTenantSubscription(tenantId, months, tier, pricePerMonth)
   return rows[0] || null;
 }
 
-/** Shared success handler for verify() and the webhook. */
+/** Shared atomic success handler for verify() and webhook. */
 async function handlePaymentSuccess(orderId, paymentId, signature, method) {
-  const pr = (await pool.query(
-    'SELECT * FROM tenant_payments WHERE razorpay_order_id = $1 ORDER BY id DESC LIMIT 1',
-    [orderId]
-  )).rows[0];
-  if (!pr) throw new Error('Unknown order: ' + orderId);
+  return await transaction(async (client) => {
+    // 1. Lock payment row to serialize concurrent verify & webhook deliveries
+    const { rows: pRows } = await client.query(
+      'SELECT * FROM tenant_payments WHERE razorpay_order_id = $1 FOR UPDATE',
+      [orderId]
+    );
+    const pr = pRows[0];
+    if (!pr) throw new Error('Unknown order: ' + orderId);
 
-  await pool.query(
-    `UPDATE tenant_payments
-     SET status = 'paid', razorpay_payment_id = $1, razorpay_signature = $2, method = $3, paid_at = now()
-     WHERE id = $4`,
-    [paymentId, signature || '', method || '', pr.id]
-  );
+    // 2. Atomic conditional update: transitions only if status <> 'paid'
+    const { rows: uRows } = await client.query(
+      `UPDATE tenant_payments
+       SET status = 'paid', paid_at = now(), razorpay_payment_id = $1, razorpay_signature = $2, method = $3
+       WHERE id = $4 AND status <> 'paid'
+       RETURNING id`,
+      [paymentId, signature || '', method || '', pr.id]
+    );
 
-  if (pr.status !== 'paid') {
-    // idempotent-ish: only extend the subscription the first time
+    // If 0 rows returned, status was already 'paid' (processed by another concurrent worker) -> return early
+    if (uRows.length === 0) {
+      return pr;
+    }
+
+    // 3. Extend subscription (strictly once)
     const purchased = BILLING_PLANS[pr.plan];
-    await activateTenantSubscription(pr.tenant_id, pr.months, purchased?.tier, purchased?.price_per_month);
+    await activateTenantSubscription(pr.tenant_id, pr.months, purchased?.tier, purchased?.price_per_month, client);
 
-    // Referral Commission Auto-Credit:
+    // 4. Referral Commission Auto-Credit (strictly once)
     try {
-      const tenant = (await pool.query('SELECT store_name, referred_by_tenant_id FROM tenants WHERE id = $1', [pr.tenant_id])).rows[0];
+      const tenant = (await client.query('SELECT store_name, referred_by_tenant_id FROM tenants WHERE id = $1', [pr.tenant_id])).rows[0];
       if (tenant && tenant.referred_by_tenant_id && purchased) {
         // 15% commission of plan amount (e.g. ₹4,999 -> ₹750, ₹14,999 -> ₹2,250)
         const commissionAmount = Math.round((purchased.amount / 100) * 0.15);
         if (commissionAmount > 0) {
-          await pool.query(
+          await client.query(
             `INSERT INTO referral_transactions (tenant_id, referred_tenant_id, type, amount, plan_id, plan_amount, status, note)
              VALUES ($1, $2, 'reward_earned', $3, $4, $5, 'completed', $6)`,
             [
@@ -2315,7 +2343,7 @@ async function handlePaymentSuccess(orderId, paymentId, signature, method) {
               `Commission (15%) for ${tenant.store_name} subscribing to ${purchased.label}`,
             ]
           );
-          await pool.query(
+          await client.query(
             `UPDATE tenants
              SET referral_wallet_balance = referral_wallet_balance + $1,
                  referral_total_earned = referral_total_earned + $1
@@ -2327,8 +2355,9 @@ async function handlePaymentSuccess(orderId, paymentId, signature, method) {
     } catch (refErr) {
       console.error('Referral credit error:', refErr.message);
     }
-  }
-  return pr;
+
+    return pr;
+  });
 }
 
 // Client POS app: create a Razorpay order for its own tenant renewal.
@@ -2387,8 +2416,7 @@ app.post('/api/billing/verify', requireAuth, async (req, res, next) => {
       return bad(res, 400, 'Payment signature verification failed');
     }
     const pr = await handlePaymentSuccess(razorpay_order_id, razorpay_payment_id, razorpay_signature, 'checkout');
-    const purchased = BILLING_PLANS[pr.plan];
-    const tenant = await activateTenantSubscription(pr.tenant_id, pr.months, purchased?.tier, purchased?.price_per_month); // re-read fresh row
+    const tenant = (await pool.query('SELECT * FROM tenants WHERE id = $1', [pr.tenant_id])).rows[0];
     res.json({ ok: true, tenant });
   } catch (e) { next(e); }
 });
@@ -2404,7 +2432,24 @@ app.post('/api/billing/webhook', express.raw({ type: '*/*', limit: '1mb' }), asy
     const expected = crypto.createHmac('sha256', RAZORPAY_WEBHOOK_SECRET).update(raw).digest('hex');
     if (sig !== expected) return bad(res, 400, 'Invalid webhook signature');
 
+    const eventId = String(req.headers['x-razorpay-event-id'] || '');
     const event = JSON.parse(raw.toString('utf8'));
+
+    // Webhook event deduplication: on replay (duplicate event_id), return 200 immediately
+    if (eventId) {
+      try {
+        await pool.query(
+          'INSERT INTO webhook_events (event_id, event_type, processed_at) VALUES ($1, $2, NOW())',
+          [eventId, event.event || 'unknown']
+        );
+      } catch (e) {
+        if (e.code === '23505') { // unique_violation
+          return res.status(200).json({ ok: true, deduplicated: true });
+        }
+        throw e;
+      }
+    }
+
     if (event.event === 'payment.captured') {
       const pay = event.payload?.payment?.entity || {};
       const orderId = pay.order_id;
