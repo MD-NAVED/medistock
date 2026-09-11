@@ -229,13 +229,15 @@ CREATE TABLE IF NOT EXISTS customer_ledger (
 );
 
 -- ----------------------------------------------------------------------------
--- Performance Indexes
+-- Performance & Base Indexes
 -- ----------------------------------------------------------------------------
 CREATE INDEX IF NOT EXISTS idx_batches_medicine ON batches(medicine_id);
 CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items(sale_id);
 CREATE INDEX IF NOT EXISTS idx_sales_created ON sales(created_at);
-CREATE INDEX IF NOT EXISTS idx_login_attempts_user ON login_attempts(username, created_at);
+CREATE INDEX IF NOT EXISTS idx_login_attempts_user ON login_attempts(username, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_customer_ledger_customer ON customer_ledger(customer_id);
+CREATE INDEX IF NOT EXISTS idx_customer_ledger_customer_created ON customer_ledger(customer_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
 
 -- ----------------------------------------------------------------------------
 -- Seed Store Settings (Default)
