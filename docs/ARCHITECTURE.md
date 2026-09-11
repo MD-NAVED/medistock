@@ -108,7 +108,7 @@ Host: medistock-api.vercel.app
   "db": {
     "connected": false,
     "latency_ms": 1002,
-    "error": "Database ping timeout (1s exceeded)"
+    "error": "Database ping timeout (2.5s exceeded)"
   },
   "uptime_seconds": 3420,
   "version": "1.0.0"
