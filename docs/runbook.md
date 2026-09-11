@@ -14,9 +14,17 @@ This runbook provides actionable, click-level troubleshooting and recovery proce
 | **API Rate Limited (Upstash Distributed 429)** | Exceeded endpoint rate limit (e.g. 120 req/min billing or 10 req/5min login per IP) | Check `Retry-After` header and Vercel serverless logs | Inspect `store_id` / client IP request volume; wait for `Retry-After` seconds. |
 | **Database Outage / Data Corruption** | Cloud host failover or data incident | Sentry alerts / Supabase status | Follow `docs/restore.md` to restore the latest nightly backup dump. |
 
----
+## 3. Standing Deploy Checklist (Billing & Gateway Changes)
 
-## 2. Step-by-Step Incident Workflows
+Whenever any code change touches billing, subscriptions, payment signatures, or webhooks:
+1. **Pre-Deploy Webhook Check**: Verify the Razorpay webhook endpoint `https://medistock-api.vercel.app/api/billing/webhook` is active with event `payment.captured` and matching `RAZORPAY_WEBHOOK_SECRET`.
+2. **Execute ₹1 End-to-End Smoke Test**:
+   - Create a test order and complete a real UPI checkout (₹1).
+   - Verify the Razorpay `pay_XXXX` ID appears in the Razorpay Dashboard.
+   - Verify `SELECT * FROM tenant_payments WHERE razorpay_payment_id = 'pay_XXXX'` has `status = 'paid'`.
+   - Verify `SELECT * FROM webhook_events` contains 1 matching `event_id` from the gateway.
+   - Verify `tenants.subscription_ends_at` is extended exactly once.
+3. **Re-Gate Test Plans**: Ensure public `/api/billing/plans` exposes only valid commercial SKUs.
 
 ### Incident A: Account Locked via Brute-Force Defense (PostgreSQL `login_attempts`)
 1. **Diagnosis**:
