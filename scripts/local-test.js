@@ -89,6 +89,7 @@ async function waitForServer(timeoutMs) {
     INVOICE_SHARE_SECRET: 'test-invoice-share-secret-980c28e674c3aae73a6fcbe39ab1e3b',
     RAZORPAY_KEY_SECRET: 'test_key_secret_for_local_harness_32ch',
     RAZORPAY_WEBHOOK_SECRET: 'test_webhook_secret_for_local_harness_32ch',
+    CRON_SECRET: 'test_cron_secret_32_characters_key',
   };
   let serverProc = null;
 
@@ -117,6 +118,7 @@ async function waitForServer(timeoutMs) {
   results['test-payment-race'] = await run('running test-payment-race.js', ['test-payment-race.js'], { BASE, DATABASE_URL: DB_URL });
   results['test-ratelimit'] = await run('running test-ratelimit.js', ['test-ratelimit.js'], { BASE });
   results['test-whatsapp-guard'] = await run('running test-whatsapp-guard.js', ['test-whatsapp-guard.js'], { BASE });
+  results['test-cron'] = await run('running test-cron.js', ['test-cron.js'], { BASE, DATABASE_URL: DB_URL });
   results['test-audit phase1'] = await run('running test-audit.js phase1', ['test-audit.js'], { BASE, AUDIT_MODE: 'phase1' });
 
   // restart in between so the DB-session-survives-restart check can run
