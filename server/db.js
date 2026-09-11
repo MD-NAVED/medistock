@@ -26,9 +26,10 @@ if (useSsl) {
 const pool = new Pool({
   connectionString,
   ssl: sslOptions,
-  // Each serverless instance opens its own pool; cap it via env so many
-  // concurrent functions cannot exhaust the database connection limit.
-  max: Number(process.env.DATABASE_POOL_MAX) || 10,
+  // In serverless, 1 connection per instance max avoids exhausting Supavisor/PostgreSQL.
+  max: Number(process.env.DATABASE_POOL_MAX) || 1,
+  idleTimeoutMillis: 10_000,
+  connectionTimeoutMillis: 8_000,
 });
 
 async function transaction(callback) {
