@@ -1,0 +1,52 @@
+name: Nightly Database Backup
+
+on:
+  schedule:
+    # Daily at 20:30 UTC (= 02:00 AM IST)
+    - cron: '30 20 * * *'
+  workflow_dispatch:
+
+jobs:
+  backup:
+    name: Backup PostgreSQL Database
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL Client Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Execute pg_dump
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          if [ -z "$SUPABASE_DB_URL" ]; then
+            echo "Error: SUPABASE_DB_URL secret is not configured"
+            exit 1
+          fi
+          TIMESTAMP=$(date -u +"%Y%m%d_%H%M%SZ")
+          BACKUP_FILE="medistock_backup_${TIMESTAMP}.sql.gz"
+          echo "Dumping database to ${BACKUP_FILE}..."
+          pg_dump "$SUPABASE_DB_URL" --clean --if-exists --no-owner --no-privileges | gzip > "${BACKUP_FILE}"
+          echo "Backup file generated: $(ls -lh ${BACKUP_FILE})"
+          echo "BACKUP_FILE=${BACKUP_FILE}" >> $GITHUB_ENV
+
+      - name: Upload Backup Artifact (Encrypted Storage)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BACKUP_FILE }}
+          path: ${{ env.BACKUP_FILE }}
+          retention-days: 30
+
+      - name: Notify Failure via Webhook (Optional)
+        if: failure()
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        run: |
+          if [ -n "$SLACK_WEBHOOK" ]; then
+            curl -X POST -H 'Content-type: application/json' --data '{"text":"🚨 *MediStock Nightly Database Backup FAILED*. Check GitHub Actions logs immediately."}' "$SLACK_WEBHOOK"
+          fi

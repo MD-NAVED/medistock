@@ -19,9 +19,10 @@ server/*.mp4
 .env.*
 !.env.example
 
-# OS junk
+# OS junk & temporary notes
 Thumbs.db
 .DS_Store
+*.txt
 
 # Logs
 *.log
