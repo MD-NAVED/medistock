@@ -169,6 +169,7 @@ async function call(pathname, { method = 'GET', body, headers = {} } = {}) {
   check('webhook_events table contains exactly ONE entry for event_id', eventRows.length === 1);
 
   console.log(`\n  ${passed} passed, ${failed} failed\n`);
+  await pool.end();
   if (failed > 0 || process.exitCode) {
     process.exit(1);
   }

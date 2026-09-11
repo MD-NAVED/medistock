@@ -93,6 +93,7 @@ async function call(pathname, { method = 'POST', headers = {} } = {}) {
   check('expired session was successfully deleted from DB', !expiredSession);
 
   console.log(`\n  ${passed} passed, ${failed} failed\n`);
+  await pool.end();
   if (failed > 0 || process.exitCode) {
     process.exit(1);
   }

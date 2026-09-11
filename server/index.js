@@ -1,12 +1,15 @@
-const Sentry = require('@sentry/node');
-if (process.env.SENTRY_DSN) {
-  Sentry.init({
-    dsn: process.env.SENTRY_DSN,
-    tracesSampleRate: 0.1,
-    environment: process.env.NODE_ENV || 'development',
-  });
-  console.log('[Sentry] Initialized backend APM & error tracking.');
-}
+let Sentry = null;
+try {
+  Sentry = require('@sentry/node');
+  if (process.env.SENTRY_DSN) {
+    Sentry.init({
+      dsn: process.env.SENTRY_DSN,
+      tracesSampleRate: 0.1,
+      environment: process.env.NODE_ENV || 'development',
+    });
+    console.log('[Sentry] Initialized backend APM & error tracking.');
+  }
+} catch (e) {}
 
 const express = require('express');
 const cors = require('cors');
@@ -120,7 +123,7 @@ app.get('/api/health', async (req, res) => {
     });
   } catch (err) {
     const latency_ms = Date.now() - start;
-    if (process.env.SENTRY_DSN) Sentry.captureException(err);
+    if (Sentry && process.env.SENTRY_DSN) Sentry.captureException(err);
     res.status(503).json({
       status: 'error',
       db: { connected: false, latency_ms, error: err.message },
@@ -388,7 +391,7 @@ function requireAuth(req, res, next) {
       // Feature tier for plan gating — the platform admin sees everything.
       req.tier = row.platform_admin === 1 ? 'elite' : (row.tenant_tier || 'starter');
 
-      if (process.env.SENTRY_DSN) {
+      if (Sentry && process.env.SENTRY_DSN) {
         Sentry.setUser({ id: String(row.id), username: row.username });
         Sentry.setTags({
           store_id: String(row.store_id || ''),
@@ -2845,7 +2848,7 @@ app.post('/api/founder/referrals/payouts/:id/action', requireAuth, requirePlatfo
 // ---------------------------------------------------------------------------
 app.use((err, req, res, next) => {
   console.error(err);
-  if (process.env.SENTRY_DSN) {
+  if (Sentry && process.env.SENTRY_DSN) {
     Sentry.captureException(err, {
       tags: {
         store_id: req.storeId ? String(req.storeId) : 'unauthenticated',
