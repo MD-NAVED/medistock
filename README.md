@@ -89,12 +89,17 @@ Supabase PostgreSQL. No idle spin-down, HTTPS everywhere.
 ### 2. Deploy the app (Vercel)
 1. Push this repo to GitHub.
 2. In Vercel: **Add New → Project** → import the repo. The `vercel.json` at the
-   root already configures the API function and the client build — no other
-   settings needed.
+   root already configures the API function, cron schedule, and the client build.
 3. In the project's **Settings → Environment Variables** add:
-   - `DATABASE_URL` = the pooler URI from step 1
-   - `DATABASE_POOL_MAX` = `3` (keeps each function instance light on the free
-     connection limit)
+   - `DATABASE_URL` = the Supavisor pooler URI (port 6543)
+   - `DATABASE_DIRECT_URL` = direct connection URI (port 5432, for migrations and EXPLAIN)
+   - `DATABASE_POOL_MAX` = `1` (1 connection per serverless instance avoids connection exhaustion)
+   - `INVOICE_SHARE_SECRET` = pinned 64-char HMAC secret for customer invoice links
+   - `RAZORPAY_KEY_ID` & `RAZORPAY_KEY_SECRET` = live Razorpay credentials
+   - `RAZORPAY_WEBHOOK_SECRET` = webhook signing secret for `payment.captured`
+   - `UPSTASH_REDIS_REST_URL` & `UPSTASH_REDIS_REST_TOKEN` = distributed API rate limiting
+   - `SENTRY_DSN` = APM & error tracking DSN
+   - `CRON_SECRET` = secret token for automated database hygiene (`/api/cron/cleanup`)
 4. **Deploy.** Log in with the demo accounts, then **immediately change both
    passwords**.
 
