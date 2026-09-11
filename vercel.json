@@ -4,6 +4,14 @@
   "installCommand": "npm install --omit=dev",
   "buildCommand": "cd client && npm install && npm run build",
   "outputDirectory": "client/dist",
+  "functions": {
+    "api/index.js": {
+      "includeFiles": "node_modules/pdfkit/**"
+    },
+    "api/*.js": {
+      "includeFiles": "node_modules/pdfkit/**"
+    }
+  },
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/index" },
     { "source": "/(.*)", "destination": "/index.html" }
