@@ -293,6 +293,12 @@ function ensureSchema() {
       }
 
       await ensureTenantPaymentsTable();
+
+      // Production performance composite indexes
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_sales_store_created ON sales(store_id, created_at DESC)');
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_batches_store_expiry ON batches(store_id, expiry_date ASC)');
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_customer_ledger_customer_created ON customer_ledger(customer_id, created_at DESC)');
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)');
     })().catch((e) => { schemaReadyPromise = null; throw e; });
   }
   return schemaReadyPromise;
