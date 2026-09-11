@@ -2248,6 +2248,8 @@ const BILLING_PLANS = {
   'elite-monthly': { tier: 'elite', label: 'Elite — Monthly', amount: 99900, months: 1, price_per_month: 999.0, tagline: 'Scanner + WhatsApp daily summary' },
   'elite-yearly': { tier: 'elite', label: 'Elite — Yearly', amount: 799900, months: 12, price_per_month: 666.0, tagline: 'Full power at the best Elite price' },
   'elite-3yr': { tier: 'elite', label: 'Founder Pack — 3 Years', amount: 1499900, months: 36, price_per_month: 416.0, tagline: 'Launch offer: 3 years of Elite (Save ₹9,000)' },
+  // Gated QA test SKU: never exposed on public paywall; accessible only by platform admin payment links
+  'test-1': { tier: 'starter', label: 'Founder Smoke Test — ₹1', amount: 100, months: 1, price_per_month: 1.0, tagline: 'Internal verification only' },
 };
 // Legacy plan ids sent by older app builds already in the field map onto the
 // closest new SKU so those clients keep renewing correctly.
@@ -2258,11 +2260,15 @@ function resolvePlanId(raw) {
 }
 
 app.get('/api/billing/plans', (req, res) => {
-  res.json({
-    plans: Object.entries(BILLING_PLANS).map(([id, p]) => ({
+  // Filter out internal test plans from the public customer paywall
+  const publicPlans = Object.entries(BILLING_PLANS)
+    .filter(([id]) => id !== 'test-1')
+    .map(([id, p]) => ({
       id, tier: p.tier, label: p.label, amount: p.amount, months: p.months,
       price_per_month: p.price_per_month, tagline: p.tagline,
-    })),
+    }));
+  res.json({
+    plans: publicPlans,
     gateway: getRazorpay() ? 'razorpay' : 'not_configured',
     key_id: RAZORPAY_KEY_ID || null,
   });
