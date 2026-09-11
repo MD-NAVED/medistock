@@ -83,7 +83,11 @@ async function waitForServer(timeoutMs) {
   log(`schema loaded, medicines seeded: ${rows[0].n}`);
   await client.end();
 
-  const serverEnv = { DATABASE_URL: DB_URL, PORT: String(APP_PORT) };
+  const serverEnv = {
+    DATABASE_URL: DB_URL,
+    PORT: String(APP_PORT),
+    INVOICE_SHARE_SECRET: 'test-invoice-share-secret-980c28e674c3aae73a6fcbe39ab1e3b',
+  };
   let serverProc = null;
 
   const startServer = async () => {

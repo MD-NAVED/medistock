@@ -143,6 +143,22 @@ async function pickStockedMedicine(token, minStock, exclude = []) {
   });
   check('return on cancelled bill blocked', returnOnCancelled.status === 409);
 
+  // ---- Public invoice verification (token-scoped) ------------------------
+  const shareToken = sale.data.sale.share_token;
+  check('sale response returns invoice share token', typeof shareToken === 'string' && shareToken.length === 24);
+
+  const pubView = await call(`/api/public/invoice/${saleId}?t=${shareToken}`);
+  check('public invoice view with valid token succeeds (200)', pubView.status === 200 && pubView.data.sale?.id === saleId);
+
+  const pubPdf = await call(`/api/public/invoice/${saleId}/pdf?t=${shareToken}`);
+  check('public invoice PDF with valid token succeeds (200)', pubPdf.status === 200);
+
+  const pubBadToken = await call(`/api/public/invoice/${saleId}?t=invalidtoken12345678901234`);
+  check('public invoice view with invalid token rejected (404)', pubBadToken.status === 404);
+
+  const pubNoToken = await call(`/api/public/invoice/${saleId}`);
+  check('public invoice view without token rejected (404)', pubNoToken.status === 404);
+
   // ---- Reports exclude cancelled / subtract returns ----------------------
   const today = new Date().toISOString().slice(0, 10);
   const rep = await call(`/api/reports/sales?from=${today}&to=${today}`, { token: owner });

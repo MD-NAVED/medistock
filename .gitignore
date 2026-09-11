@@ -17,6 +17,7 @@ server/*.mp4
 # Environment files (config lives in the DB settings table, but just in case)
 .env
 .env.*
+!.env.example
 
 # OS junk
 Thumbs.db
@@ -42,4 +43,6 @@ client/public/MediStock.apk
 .zcode/
 
 .vercel
-.env*
+.env
+.env.*
+!.env.example
