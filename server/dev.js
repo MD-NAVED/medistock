@@ -8,7 +8,19 @@ const path = require('path');
 // required because the database pool reads DATABASE_URL at load time.
 // Only the known keys below are honoured — a stray .env can never inject
 // arbitrary environment entries.
-const ENV_KEYS = ['DATABASE_URL', 'DATABASE_POOL_MAX', 'RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET', 'RAZORPAY_WEBHOOK_SECRET'];
+const ENV_KEYS = [
+  'DATABASE_URL',
+  'DATABASE_DIRECT_URL',
+  'DATABASE_POOL_MAX',
+  'INVOICE_SHARE_SECRET',
+  'RAZORPAY_KEY_ID',
+  'RAZORPAY_KEY_SECRET',
+  'RAZORPAY_WEBHOOK_SECRET',
+  'UPSTASH_REDIS_REST_URL',
+  'UPSTASH_REDIS_REST_TOKEN',
+  'SENTRY_DSN',
+  'CRON_SECRET',
+];
 function readDotEnv() {
   const values = {};
   ENV_KEYS.forEach((k) => { values[k] = null; });
