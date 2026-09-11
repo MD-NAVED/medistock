@@ -116,6 +116,7 @@ async function waitForServer(timeoutMs) {
   results['test-edit-purchase'] = await run('running test-edit-purchase.js', ['test-edit-purchase.js'], { BASE });
   results['test-payment-race'] = await run('running test-payment-race.js', ['test-payment-race.js'], { BASE, DATABASE_URL: DB_URL });
   results['test-ratelimit'] = await run('running test-ratelimit.js', ['test-ratelimit.js'], { BASE });
+  results['test-whatsapp-guard'] = await run('running test-whatsapp-guard.js', ['test-whatsapp-guard.js'], { BASE });
   results['test-audit phase1'] = await run('running test-audit.js phase1', ['test-audit.js'], { BASE, AUDIT_MODE: 'phase1' });
 
   // restart in between so the DB-session-survives-restart check can run
