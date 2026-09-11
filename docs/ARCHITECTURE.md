@@ -54,10 +54,11 @@ In a serverless environment (such as Vercel), each incoming concurrent request c
     connectionString: process.env.DATABASE_URL, // port 6543
     max: 1,                                      // 1 connection per serverless instance
     idleTimeoutMillis: 10_000,
-    connectionTimeoutMillis: 8_000,
+    connectionTimeoutMillis: 15_000,            // 15s queue headroom under burst conditions
   });
   ```
-* **Why `max: 1`?** In serverless execution, an instance handles one request at a time. A pool size of 1 completely eliminates connection bloat while Supavisor efficiently multiplexes thousands of incoming queries into a minimal pool of active database connections.
+* **Why `max: 1`?** In serverless execution, an instance handles one request at a time. A pool size of 1 completely eliminates connection bloat while Supavisor efficiently multiplexes thousands of incoming queries into a minimal pool of active database connections (empirically proven: 3-4 active backend connections under 50 concurrent virtual users).
+* **Load Test Scope Note**: The 50-VU WAN test proves **connection budget control**, not total system capacity. Testing 50 VUs from a single client IP against Vercel's free/Hobby tier triggers edge throttling. Comprehensive capacity benchmarking will be executed after Vercel Pro upgrade with distributed multi-region runners.
 * **Compatibility**: PostgreSQL transactions (`BEGIN ... COMMIT`) are pinned to a single backend connection for the duration of the transaction block by Supavisor, ensuring atomic rollbacks and serializable consistency.
 
 #### 2. Direct Connection (`DATABASE_DIRECT_URL` via Port 5432)
@@ -76,7 +77,10 @@ In a serverless environment (such as Vercel), each incoming concurrent request c
 
 ## 4. Health Check Specification (`GET /api/health`)
 
-The health endpoint provides real-time latency and database connectivity metrics:
+The health endpoint provides real-time latency and database connectivity metrics.
+
+* **Internal Health Ping Timeout**: Calibrated to **2.5 seconds** to accommodate cross-region cold-start TLS 1.3 handshakes between Vercel serverless edges and Supabase in Singapore (`ap-southeast-1`).
+* **External Uptime Monitoring**: External synthetic probes (e.g. UptimeRobot, BetterUptime) should be configured with a **5.0-second timeout** to prevent false alarms during serverless cold starts.
 
 ### Request
 ```http

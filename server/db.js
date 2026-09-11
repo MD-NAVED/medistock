@@ -29,7 +29,7 @@ const pool = new Pool({
   // In serverless, 1 connection per instance max avoids exhausting Supavisor/PostgreSQL.
   max: Number(process.env.DATABASE_POOL_MAX) || 1,
   idleTimeoutMillis: 10_000,
-  connectionTimeoutMillis: 8_000,
+  connectionTimeoutMillis: 15_000,
 });
 
 async function transaction(callback) {
