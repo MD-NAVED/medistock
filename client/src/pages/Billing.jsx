@@ -16,30 +16,10 @@ import LocalPharmacyRoundedIcon from '@mui/icons-material/LocalPharmacyRounded';
 import { api } from '../api';
 import { printInvoice } from '../printInvoice';
 import { fmt, fmtDate } from '../utils';
+import { buildWhatsAppLink } from '../utils/whatsapp';
 
 const digitsOnly = (s) => String(s || '').replace(/\D/g, '');
 
-/* wa.me deep link with the formatted bill + the hosted invoice page link. */
-function buildWhatsAppLink(invoice, storeName) {
-  const { sale, items } = invoice;
-  const digits = digitsOnly(sale.customer_phone);
-  const to = digits.length === 10 ? '91' + digits : digits;
-  const lines = [
-    `🧾 *${storeName}* — Invoice ${sale.invoice_number}`,
-    `📅 ${sale.created_at}`,
-  ];
-  if (sale.customer_name) lines.push(`👤 ${sale.customer_name}`);
-  lines.push('──────────────');
-  items.forEach((it) => lines.push(`• ${it.medicine_name} × ${it.quantity} = ₹${Number(it.line_total).toFixed(2)}`));
-  lines.push('──────────────');
-  lines.push(`Subtotal: ₹${Number(sale.subtotal).toFixed(2)}`);
-  if (Number(sale.gst_amount) > 0) lines.push(`GST: ₹${Number(sale.gst_amount).toFixed(2)}`);
-  lines.push(`*TOTAL: ₹${Number(sale.total).toFixed(2)}*`);
-  lines.push('');
-  lines.push(`📄 Invoice PDF: ${window.location.origin}/api/public/invoice/${sale.id}/pdf?t=${sale.share_token}`);
-  lines.push('_Sent via MediStock_');
-  return 'https://wa.me/' + to + '?text=' + encodeURIComponent(lines.join('\n'));
-}
 import MedicineLogo from '../components/MedicineLogo';
 import { useAuth } from '../auth';
 import { tierAllows, userTier } from '../tiers';
