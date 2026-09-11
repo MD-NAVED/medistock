@@ -1,7 +1,25 @@
+const Sentry = require('@sentry/node');
+if (process.env.SENTRY_DSN) {
+  Sentry.init({
+    dsn: process.env.SENTRY_DSN,
+    tracesSampleRate: 0.1,
+    environment: process.env.NODE_ENV || 'development',
+  });
+  console.log('[Sentry] Initialized backend APM & error tracking.');
+}
+
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
 const { pool, transaction, addUser, verifyPassword, setUserPassword } = require('./db');
+const {
+  loginIpLimiter,
+  publicPdfLimiter,
+  billingLimiter,
+  aiScannerLimiter,
+  importLimiter,
+  getRateLimitStatus,
+} = require('./lib/rateLimit');
 
 const app = express();
 
@@ -87,14 +105,17 @@ app.get('/api/health', async (req, res) => {
     res.json({
       status: 'ok',
       db: { connected: true, latency_ms },
+      ratelimit: getRateLimitStatus(),
       uptime_seconds: Math.floor(process.uptime()),
       version: '1.0.0',
     });
   } catch (err) {
     const latency_ms = Date.now() - start;
+    if (process.env.SENTRY_DSN) Sentry.captureException(err);
     res.status(503).json({
       status: 'error',
       db: { connected: false, latency_ms, error: err.message },
+      ratelimit: getRateLimitStatus(),
       uptime_seconds: Math.floor(process.uptime()),
       version: '1.0.0',
     });
@@ -291,6 +312,15 @@ function requireAuth(req, res, next) {
       req.token = token;
       // Feature tier for plan gating — the platform admin sees everything.
       req.tier = row.platform_admin === 1 ? 'elite' : (row.tenant_tier || 'starter');
+
+      if (process.env.SENTRY_DSN) {
+        Sentry.setUser({ id: String(row.id), username: row.username });
+        Sentry.setTags({
+          store_id: String(row.store_id || ''),
+          role: row.role,
+          tier: req.tier,
+        });
+      }
       // Kill-switch & trial enforcement: a suspended/expired store stops
       // working everywhere EXCEPT auth and billing, so the paywall itself
       // stays reachable and a renewal can unlock the store again.
@@ -430,7 +460,7 @@ app.post('/api/auth/signup', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-app.post('/api/auth/login', async (req, res, next) => {
+app.post('/api/auth/login', loginIpLimiter, async (req, res, next) => {
   try {
     const { username, password } = req.body || {};
     if (!username || !password) return bad(res, 400, 'Username and password required');
@@ -952,7 +982,7 @@ app.put('/api/purchases/:id', requireAuth, requireOwner, async (req, res, next) 
 // ---------------------------------------------------------------------------
 // Sales / Billing (stock OUT - automatic, FEFO)
 // ---------------------------------------------------------------------------
-app.post('/api/sales', requireAuth, async (req, res, next) => {
+app.post('/api/sales', requireAuth, billingLimiter, async (req, res, next) => {
   try {
     const { items, customer_name, customer_phone } = req.body || {};
     if (!Array.isArray(items) || !items.length) return bad(res, 400, 'Cart is empty');
@@ -1347,7 +1377,7 @@ app.get('/api/public/invoice/:id', async (req, res, next) => {
 // Uses self-contained standalone PDFKit with embedded standard fonts.
 const PDFDocument = require('./lib/pdfkit');
 
-app.get('/api/public/invoice/:id/pdf', async (req, res, next) => {
+app.get('/api/public/invoice/:id/pdf', publicPdfLimiter, async (req, res, next) => {
   try {
     const id = asId(req.params.id);
     const t = String(req.query.t || '');
@@ -1807,7 +1837,7 @@ app.post('/api/import/parse', requireAuth, requireFeature('import'), requireOwne
   } catch (e) { next(e); }
 });
 
-app.post('/api/import/commit', requireAuth, requireFeature('import'), requireOwner, async (req, res, next) => {
+app.post('/api/import/commit', requireAuth, requireOwner, requireFeature('import'), importLimiter, async (req, res, next) => {
   try {
     const rows = Array.isArray((req.body || {}).rows) ? req.body.rows : [];
     if (!rows.length) return bad(res, 400, 'No rows to import');
@@ -2731,6 +2761,15 @@ app.post('/api/founder/referrals/payouts/:id/action', requireAuth, requirePlatfo
 // ---------------------------------------------------------------------------
 app.use((err, req, res, next) => {
   console.error(err);
+  if (process.env.SENTRY_DSN) {
+    Sentry.captureException(err, {
+      tags: {
+        store_id: req.storeId ? String(req.storeId) : 'unauthenticated',
+        path: req.path,
+        method: req.method,
+      },
+    });
+  }
   if (res.headersSent) return next(err);
   res.status(500).json({ error: 'Server error: ' + err.message });
 });
