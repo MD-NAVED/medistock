@@ -1314,13 +1314,8 @@ app.get('/api/public/invoice/:id', async (req, res, next) => {
 
 // Same token-gated invoice, rendered as a real PDF (tap = download/view).
 // "Rs." instead of ₹ because the built-in PDF fonts have no rupee glyph.
-const PDFDocument = require('pdfkit');
-try {
-  require('pdfkit/js/standard-fonts/Helvetica.cjs');
-  require('pdfkit/js/standard-fonts/HelveticaBold.cjs');
-  require('pdfkit/js/standard-fonts/Courier.cjs');
-  require('pdfkit/js/standard-fonts/TimesRoman.cjs');
-} catch (e) {}
+// Uses self-contained standalone PDFKit with embedded standard fonts.
+const PDFDocument = require('./lib/pdfkit');
 
 app.get('/api/public/invoice/:id/pdf', async (req, res, next) => {
   try {
