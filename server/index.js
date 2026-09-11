@@ -2844,28 +2844,6 @@ app.post('/api/founder/referrals/payouts/:id/action', requireAuth, requirePlatfo
 });
 
 // ---------------------------------------------------------------------------
-// Temporary Sentry Verification Endpoint (Throws Error with store_id Tag)
-// ---------------------------------------------------------------------------
-app.get('/api/debug/sentry-test', async (req, res, next) => {
-  try {
-    const testErr = new Error('MediStock Sentry Verification Diagnostic Test Error (' + new Date().toISOString() + ')');
-    testErr.status = 500;
-    if (Sentry && process.env.SENTRY_DSN) {
-      Sentry.withScope(async (scope) => {
-        scope.setTag('store_id', 'debug-test-store');
-        scope.setTag('test_purpose', 'PR_4_Sentry_Acceptance_Verification');
-        scope.setUser({ id: '999', username: 'debug_verifier' });
-        Sentry.captureException(testErr);
-      });
-      await Sentry.flush(3000);
-    }
-    throw testErr;
-  } catch (e) {
-    next(e);
-  }
-});
-
-// ---------------------------------------------------------------------------
 // Error handling — with synchronous Sentry.flush() for serverless execution
 // ---------------------------------------------------------------------------
 app.use(async (err, req, res, next) => {
