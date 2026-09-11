@@ -74,6 +74,15 @@ function invoiceToken(saleId) {
   return crypto.createHmac('sha256', INVOICE_SECRET).update(String(saleId)).digest('hex').slice(0, 24);
 }
 
+function verifyInvoiceToken(saleId, candidateToken) {
+  if (!saleId || !candidateToken || typeof candidateToken !== 'string') return false;
+  const expected = invoiceToken(saleId);
+  const bufA = Buffer.from(candidateToken, 'utf8');
+  const bufB = Buffer.from(expected, 'utf8');
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
 app.set('trust proxy', true);
 app.use(express.json({ limit: '15mb' })); // import upload sends the workbook as base64
 
@@ -1346,7 +1355,7 @@ app.get('/api/public/invoice/:id', async (req, res, next) => {
   try {
     const id = asId(req.params.id);
     const t = String(req.query.t || '');
-    if (!id || !t || t !== invoiceToken(id)) return bad(res, 404, 'Invoice not found');
+    if (!id || !verifyInvoiceToken(id, t)) return bad(res, 404, 'Invoice not found');
 
     const sale = (await pool.query(
       'SELECT id, invoice_number, customer_name, subtotal::float8 AS subtotal, gst_amount::float8 AS gst_amount, total::float8 AS total, status, created_at FROM sales WHERE id = $1',
@@ -1381,7 +1390,7 @@ app.get('/api/public/invoice/:id/pdf', publicPdfLimiter, async (req, res, next) 
   try {
     const id = asId(req.params.id);
     const t = String(req.query.t || '');
-    if (!id || !t || t !== invoiceToken(id)) return bad(res, 404, 'Invoice not found');
+    if (!id || !verifyInvoiceToken(id, t)) return bad(res, 404, 'Invoice not found');
 
     const sale = (await pool.query(
       'SELECT id, invoice_number, customer_name, subtotal::float8 AS subtotal, gst_amount::float8 AS gst_amount, total::float8 AS total, status, created_at FROM sales WHERE id = $1',
