@@ -4,8 +4,10 @@
 
 // Preload standard fonts for Vercel NFT bundler
 try {
-  require('pdfkit/standard-fonts/Helvetica');
-  require('pdfkit/standard-fonts/HelveticaBold');
+  require('pdfkit/js/standard-fonts/Helvetica.cjs');
+  require('pdfkit/js/standard-fonts/HelveticaBold.cjs');
+  require('pdfkit/js/standard-fonts/Courier.cjs');
+  require('pdfkit/js/standard-fonts/TimesRoman.cjs');
 } catch (e) {}
 
 const app = require('../server/index');
