@@ -131,6 +131,66 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// DB Hygiene Cron Endpoint — Daily automated cleanup of expired records
+// Protected by CRON_SECRET header comparison (crypto.timingSafeEqual)
+// ---------------------------------------------------------------------------
+app.post('/api/cron/cleanup', async (req, res, next) => {
+  try {
+    const cronSecret = process.env.CRON_SECRET;
+    if (!cronSecret) {
+      return res.status(500).json({ error: 'CRON_SECRET environment variable is not set' });
+    }
+
+    const authHeader = String(req.headers.authorization || '');
+    const candidate = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
+
+    const bufCandidate = Buffer.from(candidate, 'utf8');
+    const bufExpected = Buffer.from(cronSecret, 'utf8');
+
+    if (bufCandidate.length !== bufExpected.length || !crypto.timingSafeEqual(bufCandidate, bufExpected)) {
+      return res.status(401).json({ error: 'Unauthorized — invalid or missing cron secret' });
+    }
+
+    await ensureSchema();
+
+    // 1. Delete expired sessions
+    let deletedSessions = 0;
+    await transaction(async (client) => {
+      const { rowCount } = await client.query('DELETE FROM sessions WHERE expires_at < NOW()');
+      deletedSessions = rowCount;
+    });
+
+    // 2. Delete login attempts older than 30 days
+    let deletedLoginAttempts = 0;
+    await transaction(async (client) => {
+      const { rowCount } = await client.query("DELETE FROM login_attempts WHERE created_at < NOW() - INTERVAL '30 days'");
+      deletedLoginAttempts = rowCount;
+    });
+
+    // 3. Delete webhook deduplication events older than 30 days
+    let deletedWebhookEvents = 0;
+    await transaction(async (client) => {
+      const { rowCount } = await client.query("DELETE FROM webhook_events WHERE processed_at < NOW() - INTERVAL '30 days'");
+      deletedWebhookEvents = rowCount;
+    });
+
+    const deleted = {
+      sessions: deletedSessions,
+      login_attempts: deletedLoginAttempts,
+      webhook_events: deletedWebhookEvents,
+    };
+
+    console.log('[Cron Cleanup] Executed daily database hygiene:', JSON.stringify(deleted));
+
+    res.json({
+      ok: true,
+      timestamp: new Date().toISOString(),
+      deleted,
+    });
+  } catch (e) { next(e); }
+});
+
 // Route params used as ids are converted to numbers before touching the db.
 const asId = (v) => { const n = Number(v); return Number.isInteger(n) && n > 0 ? n : 0; };
 
