@@ -30,7 +30,7 @@ In a serverless environment (such as Vercel), each incoming concurrent request c
   ┌──────────────────────────────────────────────────────┐
   │     Supavisor Pooler (Port 6543, Transaction Mode)   │
   │     - Pins connections only for active query/tx      │
-  │     - Scales to 10,000+ client connections           │
+  │     - Multiplexes serverless requests to DB pool     │
   └──────────────────────────┬───────────────────────────┘
                              │ (Maintains ≤ 8-15 active connections)
                              ▼

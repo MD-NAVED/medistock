@@ -83,3 +83,26 @@ Whenever any code change touches billing, subscriptions, payment signatures, or 
 
 ### Incident E: Database Recovery & Disaster Recovery
 - If the primary database is lost or compromised, follow the recovery procedure in [`docs/restore.md`](restore.md).
+
+---
+
+## 4. Scheduled Maintenance & Operational Procedures
+
+### A. Schema Initialization & Memoization Guarantee
+- `ensureSchema()` is memoized via `schemaReadyPromise`.
+- On container boot, the bootstrap runs once; all subsequent requests reuse the resolved promise in 0ms without re-querying schema DDL.
+- If a database connection error occurs during boot, `catch` resets `schemaReadyPromise = null` so the subsequent request safely retries.
+
+### B. Quarterly Credential & Secret Rotation Procedure
+1. **Razorpay Webhook Secret**:
+   - In Razorpay Dashboard $\rightarrow$ Developers $\rightarrow$ Webhooks $\rightarrow$ Edit $\rightarrow$ Regenerate Secret.
+   - Immediately update `RAZORPAY_WEBHOOK_SECRET` in Vercel `medistock-api` (Production + Preview).
+2. **PostgreSQL Database Password**:
+   - In Supabase Dashboard $\rightarrow$ Settings $\rightarrow$ Database $\rightarrow$ Reset database password.
+   - Update `DATABASE_URL` (port 6543) and `DATABASE_DIRECT_URL` (port 5432) in Vercel `medistock-api`.
+   - Update `SUPABASE_DB_URL` in GitHub Repository Secrets.
+3. **Post-Rotation Verification Checklist**:
+   - `curl -i https://medistock-api.vercel.app/api/health` $\rightarrow$ `connected: true`.
+   - Verify existing WhatsApp invoice link loads `200 OK` (unaffected because `INVOICE_SHARE_SECRET` is pinned).
+   - Execute ₹1 live UPI smoke test to verify new webhook secret end-to-end.
+   - Trigger manual GitHub Actions backup run to verify database dump succeeds.
