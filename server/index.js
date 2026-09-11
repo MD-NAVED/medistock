@@ -2844,21 +2844,51 @@ app.post('/api/founder/referrals/payouts/:id/action', requireAuth, requirePlatfo
 });
 
 // ---------------------------------------------------------------------------
-// Error handling
+// Temporary Sentry Verification Endpoint (Throws Error with store_id Tag)
 // ---------------------------------------------------------------------------
-app.use((err, req, res, next) => {
-  console.error(err);
+app.get('/api/debug/sentry-test', async (req, res, next) => {
+  try {
+    const testErr = new Error('MediStock Sentry Verification Diagnostic Test Error (' + new Date().toISOString() + ')');
+    testErr.status = 500;
+    if (Sentry && process.env.SENTRY_DSN) {
+      Sentry.withScope(async (scope) => {
+        scope.setTag('store_id', 'debug-test-store');
+        scope.setTag('test_purpose', 'PR_4_Sentry_Acceptance_Verification');
+        scope.setUser({ id: '999', username: 'debug_verifier' });
+        Sentry.captureException(testErr);
+      });
+      await Sentry.flush(3000);
+    }
+    throw testErr;
+  } catch (e) {
+    next(e);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Error handling — with synchronous Sentry.flush() for serverless execution
+// ---------------------------------------------------------------------------
+app.use(async (err, req, res, next) => {
+  console.error('[Unhandled Server Error]', err);
   if (Sentry && process.env.SENTRY_DSN) {
-    Sentry.captureException(err, {
-      tags: {
-        store_id: req.storeId ? String(req.storeId) : 'unauthenticated',
-        path: req.path,
-        method: req.method,
-      },
-    });
+    try {
+      Sentry.withScope((scope) => {
+        scope.setTag('store_id', req.storeId ? String(req.storeId) : 'unauthenticated');
+        scope.setTag('path', req.path || 'unknown');
+        scope.setTag('method', req.method || 'unknown');
+        if (req.tier) scope.setTag('tier', req.tier);
+        if (req.user?.role) scope.setTag('role', req.user.role);
+        if (req.user) scope.setUser({ id: String(req.user.id), username: req.user.username });
+        Sentry.captureException(err);
+      });
+      // CRITICAL FOR SERVERLESS: Flush event buffer before res.json() terminates lambda container
+      await Sentry.flush(2500);
+    } catch (sentryErr) {
+      console.error('[Sentry Flush Error]', sentryErr.message);
+    }
   }
   if (res.headersSent) return next(err);
-  res.status(500).json({ error: 'Server error: ' + err.message });
+  res.status(err.status || 500).json({ error: 'Server error: ' + err.message });
 });
 
 module.exports = app;
