@@ -132,11 +132,7 @@ function createLimiter({ name, limit, windowSeconds, getKey }) {
 }
 
 function resolveClientIp(req) {
-  const forwarded = req.headers['x-forwarded-for'];
-  if (forwarded) {
-    const firstIp = String(forwarded).split(',')[0].trim();
-    if (firstIp) return firstIp;
-  }
+  // Rely on Express's verified req.ip under trust-proxy configuration to prevent XFF header spoofing
   return req.ip || req.socket?.remoteAddress || 'unknown';
 }
 
