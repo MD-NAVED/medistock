@@ -2405,6 +2405,9 @@ app.post('/api/billing/create-order', requireAuth, async (req, res, next) => {
     if (!rp) return bad(res, 503, 'Payment gateway is not configured yet. Please contact support.');
 
     const planId = resolvePlanId(req.body?.plan) || 'pro-yearly';
+    if (planId === 'test-1' && !req.user?.platformAdmin) {
+      return bad(res, 403, 'This plan SKU is restricted to internal founder verification.');
+    }
     const plan = BILLING_PLANS[planId];
     if (!plan) return bad(res, 400, 'Invalid plan');
 
