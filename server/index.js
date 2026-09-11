@@ -80,7 +80,7 @@ app.get('/api/health', async (req, res) => {
   const start = Date.now();
   try {
     const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('Database ping timeout (1s exceeded)')), 1000)
+      setTimeout(() => reject(new Error('Database ping timeout (2.5s exceeded)')), 2500)
     );
     await Promise.race([pool.query('SELECT 1'), timeoutPromise]);
     const latency_ms = Date.now() - start;
