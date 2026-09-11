@@ -73,6 +73,34 @@ app.use((req, res, next) => {
 
 const bad = (res, code, msg) => res.status(code).json({ error: msg });
 
+// ---------------------------------------------------------------------------
+// Health Check Endpoint — verifies pool connectivity with a 1-second timeout
+// ---------------------------------------------------------------------------
+app.get('/api/health', async (req, res) => {
+  const start = Date.now();
+  try {
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Database ping timeout (1s exceeded)')), 1000)
+    );
+    await Promise.race([pool.query('SELECT 1'), timeoutPromise]);
+    const latency_ms = Date.now() - start;
+    res.json({
+      status: 'ok',
+      db: { connected: true, latency_ms },
+      uptime_seconds: Math.floor(process.uptime()),
+      version: '1.0.0',
+    });
+  } catch (err) {
+    const latency_ms = Date.now() - start;
+    res.status(503).json({
+      status: 'error',
+      db: { connected: false, latency_ms, error: err.message },
+      uptime_seconds: Math.floor(process.uptime()),
+      version: '1.0.0',
+    });
+  }
+});
+
 // Route params used as ids are converted to numbers before touching the db.
 const asId = (v) => { const n = Number(v); return Number.isInteger(n) && n > 0 ? n : 0; };
 

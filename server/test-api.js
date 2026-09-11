@@ -59,6 +59,15 @@ async function pickStockedMedicine(token, minStock, exclude = []) {
 }
 
 (async () => {
+  // ---- Health Check ----------------------------------------------------
+  const health = await call('/api/health');
+  check('GET /api/health returns 200', health.status === 200, JSON.stringify(health.data));
+  check('health status is ok', health.data?.status === 'ok');
+  check('health db is connected', health.data?.db?.connected === true);
+  check('health db reports latency_ms', typeof health.data?.db?.latency_ms === 'number' && health.data.db.latency_ms >= 0);
+  check('health reports uptime_seconds', typeof health.data?.uptime_seconds === 'number' && health.data.uptime_seconds >= 0);
+  check('health reports version', health.data?.version === '1.0.0');
+
   // ---- Auth -------------------------------------------------------------
   const login = await call('/api/auth/login', { method: 'POST', body: { username: 'owner', password: 'owner123' } });
   check('owner login works (sha256 row upgraded to scrypt)', login.status === 200 && !!login.data.token,
