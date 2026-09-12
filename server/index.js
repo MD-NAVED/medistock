@@ -2331,7 +2331,7 @@ const BILLING_PLANS = {
 };
 // Legacy plan ids sent by older app builds already in the field map onto the
 // closest new SKU so those clients keep renewing correctly.
-const PLAN_ALIASES = { monthly: 'pro-monthly', yearly: 'pro-yearly', lifetime: 'elite-3yr' };
+const PLAN_ALIASES = { monthly: 'pro-monthly', yearly: 'pro-yearly', lifetime: 'elite-3yr', starter: 'starter-monthly' };
 function resolvePlanId(raw) {
   const id = String(raw || '').trim();
   return BILLING_PLANS[id] ? id : (PLAN_ALIASES[id] || null);
@@ -2410,17 +2410,56 @@ async function activateTenantSubscription(tenantId, months, tier, pricePerMonth,
 }
 
 /** Shared atomic success handler for verify() and webhook. */
-async function handlePaymentSuccess(orderId, paymentId, signature, method) {
+async function handlePaymentSuccess(orderId, paymentId, signature, method, fallbackContext = null) {
   return await transaction(async (client) => {
-    // 1. Lock payment row to serialize concurrent verify & webhook deliveries
-    const { rows: pRows } = await client.query(
-      'SELECT * FROM tenant_payments WHERE razorpay_order_id = $1 FOR UPDATE',
-      [orderId]
-    );
-    const pr = pRows[0];
-    if (!pr) throw new Error('Unknown order: ' + orderId);
+    let pr = null;
 
-    // 2. Atomic conditional update: transitions only if status <> 'paid'
+    // 1. Primary Lookup: by razorpay_order_id
+    if (orderId) {
+      const { rows: pRows } = await client.query(
+        'SELECT * FROM tenant_payments WHERE razorpay_order_id = $1 FOR UPDATE',
+        [orderId]
+      );
+      pr = pRows[0];
+    }
+
+    // 2. Secondary Lookup: by pre-created payment id (from notes.payment_id)
+    if (!pr && fallbackContext?.fallbackPaymentId) {
+      const { rows: pRows } = await client.query(
+        'SELECT * FROM tenant_payments WHERE id = $1 FOR UPDATE',
+        [fallbackContext.fallbackPaymentId]
+      );
+      pr = pRows[0];
+      if (pr && orderId && !pr.razorpay_order_id) {
+        await client.query('UPDATE tenant_payments SET razorpay_order_id = $1 WHERE id = $2', [orderId, pr.id]);
+      }
+    }
+
+    // 3. Fallback Auto-Creation: if no pre-created row exists (e.g. ad-hoc payment links, replayed captures)
+    if (!pr && fallbackContext) {
+      const { tenantId, planId, amount, months } = fallbackContext;
+
+      // Idempotency: verify if this paymentId was already processed
+      const { rows: paidRows } = await client.query(
+        'SELECT * FROM tenant_payments WHERE razorpay_payment_id = $1 FOR UPDATE',
+        [paymentId]
+      );
+      if (paidRows.length > 0) {
+        return paidRows[0];
+      }
+
+      const { rows: newRows } = await client.query(
+        `INSERT INTO tenant_payments (tenant_id, plan, months, amount, razorpay_order_id, status)
+         VALUES ($1, $2, $3, $4, $5, 'created')
+         RETURNING *`,
+        [tenantId, planId, months, amount, orderId || paymentId]
+      );
+      pr = newRows[0];
+    }
+
+    if (!pr) throw new Error('Unknown order: ' + (orderId || paymentId));
+
+    // 4. Atomic conditional update: transitions only if status <> 'paid'
     const { rows: uRows } = await client.query(
       `UPDATE tenant_payments
        SET status = 'paid', paid_at = now(), razorpay_payment_id = $1, razorpay_signature = $2, method = $3
@@ -2552,26 +2591,69 @@ app.post('/api/billing/webhook', express.raw({ type: '*/*', limit: '1mb' }), asy
     const eventId = String(req.headers['x-razorpay-event-id'] || '');
     const event = JSON.parse(raw.toString('utf8'));
 
-    // Webhook event deduplication: on replay (duplicate event_id), return 200 immediately
+    // Webhook event deduplication: return 200 immediately if event was already successfully processed
     if (eventId) {
-      try {
-        await pool.query(
-          'INSERT INTO webhook_events (event_id, event_type, processed_at) VALUES ($1, $2, NOW())',
-          [eventId, event.event || 'unknown']
-        );
-      } catch (e) {
-        if (e.code === '23505') { // unique_violation
-          return res.status(200).json({ ok: true, deduplicated: true });
-        }
-        throw e;
+      const { rows: existingEvt } = await pool.query(
+        'SELECT event_id FROM webhook_events WHERE event_id = $1',
+        [eventId]
+      );
+      if (existingEvt.length > 0) {
+        return res.status(200).json({ ok: true, deduplicated: true });
       }
     }
 
     if (event.event === 'payment.captured') {
       const pay = event.payload?.payment?.entity || {};
-      const orderId = pay.order_id;
-      if (orderId) await handlePaymentSuccess(orderId, pay.id, '', pay.method || 'webhook');
+      const orderId = pay.order_id || null;
+      const notes = pay.notes || {};
+      const fallbackPaymentId = asId(notes.payment_id);
+      const tenantId = asId(notes.tenant_id);
+      const planId = resolvePlanId(notes.plan);
+
+      let fallbackContext = null;
+      if (tenantId && planId) {
+        const plan = BILLING_PLANS[planId];
+        if (plan) {
+          if (Number(pay.amount) === Number(plan.amount)) {
+            fallbackContext = {
+              tenantId,
+              planId,
+              amount: plan.amount,
+              months: plan.months,
+              fallbackPaymentId,
+            };
+          } else {
+            console.warn('[Webhook Guard] Ignored payment with mismatched amount:', {
+              payId: pay.id,
+              receivedAmount: pay.amount,
+              expectedAmount: plan.amount,
+              planId,
+            });
+          }
+        } else {
+          console.warn('[Webhook Guard] Ignored payment with invalid plan in notes:', { payId: pay.id, plan: notes.plan });
+        }
+      } else if (!orderId) {
+        console.warn('[Webhook Guard] Ignored payment without order_id and incomplete notes:', {
+          payId: pay.id,
+          orderId,
+          notes,
+        });
+      }
+
+      if (orderId || fallbackContext) {
+        await handlePaymentSuccess(orderId, pay.id, '', pay.method || 'webhook', fallbackContext);
+      }
     }
+
+    // Webhook event written strictly AFTER successful processing
+    if (eventId) {
+      await pool.query(
+        'INSERT INTO webhook_events (event_id, event_type, processed_at) VALUES ($1, $2, NOW()) ON CONFLICT (event_id) DO NOTHING',
+        [eventId, event.event || 'unknown']
+      );
+    }
+
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
@@ -2592,11 +2674,20 @@ app.post('/api/founder/tenants/:id/payment-link', requireAuth, requirePlatformAd
     const plan = planId ? BILLING_PLANS[planId] : null;
     if (!plan) return bad(res, 400, 'Invalid plan');
 
+    // Pre-create payment row in tenant_payments (status='created')
+    const tpRes = await pool.query(
+      `INSERT INTO tenant_payments (tenant_id, plan, months, amount, razorpay_order_id, status)
+       VALUES ($1, $2, $3, $4, $5, 'created')
+       RETURNING id`,
+      [tenant.id, planId, plan.months, plan.amount, '']
+    );
+    const paymentId = tpRes.rows[0].id;
+
     const link = await rp.paymentLink.create({
       amount: plan.amount,
       currency: 'INR',
       accept_partial: false,
-      reference_id: 'T' + tenant.id + '-' + planId + '-' + Date.now(),
+      reference_id: 'TP-' + paymentId + '-' + tenant.id + '-' + Date.now(),
       description: 'MediStock ' + plan.label + ' — ' + tenant.store_name,
       customer: {
         name: tenant.owner_name,
@@ -2604,8 +2695,14 @@ app.post('/api/founder/tenants/:id/payment-link', requireAuth, requirePlatformAd
         email: tenant.email || undefined,
       },
       notify: { sms: false, email: false },
-      notes: { tenant_id: String(tenant.id), plan: planId },
+      notes: { tenant_id: String(tenant.id), plan: planId, payment_id: String(paymentId) },
     });
+
+    // Update with Razorpay payment link ID or order ID if returned
+    await pool.query(
+      'UPDATE tenant_payments SET razorpay_order_id = $1 WHERE id = $2',
+      [link.order_id || link.id, paymentId]
+    );
 
     const shortUrl = link.short_url;
     const cleanPhone = String(tenant.phone).replace(/[^\d]/g, '').slice(-10);
