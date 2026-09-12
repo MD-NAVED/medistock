@@ -76,8 +76,9 @@ Whenever any code change touches billing, subscriptions, payment signatures, or 
      ```sql
      SELECT * FROM webhook_events ORDER BY processed_at DESC LIMIT 20;
      ```
-   - If webhook was not delivered, go to **Razorpay Dashboard $\rightarrow$ Webhooks $\rightarrow$ View Deliveries** and click **Resend / Replay**.
-   - Or manually activate the store via Founder Superadmin console at `https://medistock-admin.vercel.app/tenants`.
+   - **Razorpay Limitation Note**: Razorpay doesn't retain webhook bodies (the UI displays `null` for request body/response) and marks `200 OK` deliveries as complete with no manual "Resend" button (auto-retry only triggers on non-200 responses). Capture payloads in your own logging if you need replay capability.
+   - If a webhook failed with 5xx/4xx, Razorpay's exponential auto-retry will retry automatically over 24 hours.
+   - To immediately activate a store without waiting: use the Founder Superadmin console at `https://medistock-admin.vercel.app/tenants` or run an administrative SQL update.
 
 ---
 
