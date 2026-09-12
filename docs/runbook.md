@@ -113,3 +113,40 @@ Whenever any code change touches billing, subscriptions, payment signatures, or 
 - **Schedule**: Every day at 02:00 AM IST (`30 20 * * *` UTC).
 - **Retention**: 30 days stored in GitHub Actions encrypted artifact repository.
 - **Recovery Targets**: Recovery Time Objective (RTO) < 30 minutes, Recovery Point Objective (RPO) $\le$ 24 hours. Refer to [`docs/restore.md`](restore.md) for full disaster recovery instructions.
+
+### D. Manual Reconciliation Procedure (Payment-Link Desync)
+When a customer pays via an ad-hoc Razorpay Payment Link or if a webhook arrived before the dual-match handler was deployed:
+1. **Verify Payment on Gateway**:
+   - Confirm in Razorpay Dashboard $\rightarrow$ Payments that the payment is `Captured` with valid `pay_XXXX`, `order_XXXX`, and amount matching the intended plan.
+2. **Execute Atomic Reconciliation Query**:
+   ```sql
+   BEGIN;
+   INSERT INTO tenant_payments (
+     tenant_id, plan, months, amount, currency,
+     razorpay_order_id, razorpay_payment_id, razorpay_signature,
+     status, method, paid_at, created_at
+   ) VALUES (
+     <TENANT_ID>, '<PLAN_ID>', <MONTHS>, <AMOUNT_PAISE>, 'INR',
+     '<ORDER_ID>', '<PAYMENT_ID>',
+     'manual-reconciliation: payment-link flow paid before webhook dual-match fix was deployed',
+     'paid', '<METHOD>', '<CAPTURED_AT>', NOW()
+   );
+
+   UPDATE tenants
+   SET
+     plan = '<PLAN_BASE>',
+     tier = '<TIER>',
+     status = 'active',
+     price_per_month = <PRICE>,
+     subscription_ends_at = GREATEST(subscription_ends_at, NOW()) + INTERVAL '<MONTHS> month'
+   WHERE id = <TENANT_ID>;
+   COMMIT;
+   ```
+3. **Audit Trail Guarantee**:
+   - The row is distinctly marked with `razorpay_signature` carrying the `manual-reconciliation` prefix.
+   - The event ID is recorded in `webhook_events` to protect against subsequent duplicate processing.
+4. **Post-Reconciliation Verification**:
+   - Verify founder payments ledger: `GET /api/founder/payments` shows the payment as `paid`.
+   - Verify POS app `/subscription` shows the updated plan and extended expiry.
+   - *Gateway Limitation Note*: Razorpay dashboard does NOT retain webhook bodies (displays `null` for body/response) and marks `200 OK` deliveries as permanent with no manual resend button. Always capture raw webhook payloads in your own application logging if offline replay capability is required.
+
