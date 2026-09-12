@@ -3,7 +3,11 @@
  */
 const { Client } = require('pg');
 
-const url = process.env.DATABASE_DIRECT_URL || process.env.DATABASE_URL || 'postgresql://postgres.PROJECT_REF:REDACTED_PASSWORD@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres';
+const url = process.env.DATABASE_DIRECT_URL || process.env.DATABASE_URL;
+if (!url) {
+  console.error('DATABASE_DIRECT_URL or DATABASE_URL env var required');
+  process.exit(1);
+}
 
 (async () => {
   const client = new Client({ connectionString: url, ssl: { rejectUnauthorized: false } });

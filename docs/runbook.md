@@ -106,3 +106,9 @@ Whenever any code change touches billing, subscriptions, payment signatures, or 
    - Verify existing WhatsApp invoice link loads `200 OK` (unaffected because `INVOICE_SHARE_SECRET` is pinned).
    - Execute ₹1 live UPI smoke test to verify new webhook secret end-to-end.
    - Trigger manual GitHub Actions backup run to verify database dump succeeds.
+
+### C. Automated Nightly Backups & Disaster Recovery Verification
+- **First Successful Backup**: 2026-09-12 (Workflow Run #2 verified, 22s execution, 1 artifact produced).
+- **Schedule**: Every day at 02:00 AM IST (`30 20 * * *` UTC).
+- **Retention**: 30 days stored in GitHub Actions encrypted artifact repository.
+- **Recovery Targets**: Recovery Time Objective (RTO) < 30 minutes, Recovery Point Objective (RPO) $\le$ 24 hours. Refer to [`docs/restore.md`](restore.md) for full disaster recovery instructions.

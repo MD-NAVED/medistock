@@ -5,8 +5,12 @@ const { Client } = require('pg');
 const crypto = require('crypto');
 
 const BASE_URL = 'https://medistock-api.vercel.app';
-const DIRECT_URL = 'postgresql://postgres.PROJECT_REF:REDACTED_PASSWORD@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres';
-const WEBHOOK_SECRET = 'bab45288bbf318a937ff3edcdd77863b3e2b';
+const DIRECT_URL = process.env.DATABASE_DIRECT_URL;
+const WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET;
+if (!DIRECT_URL || !WEBHOOK_SECRET) {
+  console.error('DATABASE_DIRECT_URL and RAZORPAY_WEBHOOK_SECRET env vars required');
+  process.exit(1);
+}
 
 (async () => {
   console.log('=== PR #3 Post-Merge Live Payment Verification ===');

@@ -8,7 +8,11 @@ const { Client } = require('pg');
 const https = require('https');
 
 const TARGET_URL = 'https://medistock-api.vercel.app';
-const DIRECT_URL = 'postgresql://postgres.PROJECT_REF:REDACTED_PASSWORD@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres';
+const DIRECT_URL = process.env.DATABASE_DIRECT_URL;
+if (!DIRECT_URL) {
+  console.error('DATABASE_DIRECT_URL env var required');
+  process.exit(1);
+}
 
 const httpsAgent = new https.Agent({
   keepAlive: true,
