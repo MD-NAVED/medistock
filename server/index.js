@@ -388,8 +388,8 @@ function requireAuth(req, res, next) {
                    storeId: row.store_id, platformAdmin: row.platform_admin === 1 };
       req.storeId = row.store_id;
       req.token = token;
-      // Feature tier for plan gating — the platform admin sees everything.
-      req.tier = row.platform_admin === 1 ? 'elite' : (row.tenant_tier || 'starter');
+      // Feature tier reflects the store's actual subscription plan.
+      req.tier = row.tenant_tier || 'starter';
 
       if (Sentry && process.env.SENTRY_DSN) {
         Sentry.setUser({ id: String(row.id), username: row.username });
@@ -584,7 +584,7 @@ app.post('/api/auth/login', loginIpLimiter, async (req, res, next) => {
     }
 
     const token = await createSession(u.id);
-    res.json({ token, user: { id: u.id, username: u.username, name: u.name, role: u.role, platform_admin: u.platform_admin === 1, store_id: u.store_id, tier: u.platform_admin === 1 ? 'elite' : loginTier } });
+    res.json({ token, user: { id: u.id, username: u.username, name: u.name, role: u.role, platform_admin: u.platform_admin === 1, store_id: u.store_id, tier: loginTier } });
   } catch (e) { next(e); }
 });
 

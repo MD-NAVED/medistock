@@ -150,3 +150,43 @@ When a customer pays via an ad-hoc Razorpay Payment Link or if a webhook arrived
    - Verify POS app `/subscription` shows the updated plan and extended expiry.
    - *Gateway Limitation Note*: Razorpay dashboard does NOT retain webhook bodies (displays `null` for body/response) and marks `200 OK` deliveries as permanent with no manual resend button. Always capture raw webhook payloads in your own application logging if offline replay capability is required.
 
+### E. Mobile Android APK Rebuild & Distribution Procedure
+Whenever a client-side fix (UI, service worker, caching, Sentry) requires a new APK release:
+1. **Prepare Client Assets & Environment**:
+   - Ensure `client/.env.production` has `VITE_API_URL` and `VITE_SENTRY_DSN` configured.
+   - Run relative-base Capacitor build:
+     ```bash
+     cd client
+     node -e "process.env.CAPACITOR_BUILD='true'; require('child_process').execSync('npx vite build', { stdio: 'inherit' });"
+     ```
+2. **Verify Critical PWA Assets in `dist/`**:
+   - Confirm `client/dist/sw.js` excludes API routes: `url.pathname.startsWith('/api/')` and increments cache version (`medistock-shell-v3`).
+   - Confirm `client/dist/assets/*.js` contains Sentry ingest configuration.
+3. **Bump Version in `client/android/app/build.gradle`**:
+   - Increment `versionCode` (e.g., `13` $\rightarrow$ `14`).
+   - Increment `versionName` (e.g., `"1.3.8"` $\rightarrow$ `"1.3.9"`).
+4. **Sync Web Assets to Capacitor Native Android**:
+   ```bash
+   cd client
+   npx cap sync android
+   ```
+5. **Compile Release APK**:
+   ```bash
+   cd client/android
+   ./gradlew assembleRelease
+   ```
+   *(On Windows PowerShell: `.\gradlew.bat assembleRelease`)*
+6. **Package Distribution Artifact**:
+   - Output binary is generated at:
+     `client/android/app/build/outputs/apk/release/app-release.apk` (~3.6MB).
+   - Copy to distribution location (root `./MediStock.apk`):
+     ```bash
+     cp client/android/app/build/outputs/apk/release/app-release.apk ./MediStock.apk
+     ```
+   - **CRITICAL**: Never place the output APK inside `client/public/`. Vite copies `client/public/` into `client/dist/`, which Capacitor then bundles into Android assets, causing recursive APK bloat.
+7. **Sideload & Verify**:
+   - Install over existing build on Android device.
+   - Verify Subscription page reflects current store plan (`Starter`).
+   - Verify no service worker TypeErrors in DevTools console (`chrome://inspect`).
+
+
