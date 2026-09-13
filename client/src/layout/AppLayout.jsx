@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { Outlet, useLocation, useNavigate, Link } from 'react-router-dom';
 import {
   AppBar, Toolbar, Typography, IconButton, Box, Chip, Badge, Drawer, Divider,
   List, ListItemButton, ListItemIcon, ListItemText, Tooltip, Avatar,
@@ -20,6 +20,7 @@ import WorkspacePremiumIcon from '@mui/icons-material/WorkspacePremium';
 import CardGiftcardIcon from '@mui/icons-material/CardGiftcard';
 import { api } from '../api';
 import { useAuth } from '../auth';
+import { getTrialDaysRemaining } from '../tiers';
 
 const DRAWER_WIDTH = 248;
 
@@ -30,6 +31,7 @@ export default function AppLayout() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [storeName, setStoreName] = useState('');
   const [alertCount, setAlertCount] = useState(0);
+  const trialDaysLeft = getTrialDaysRemaining(user);
 
   useEffect(() => {
     api('/api/settings').then((s) => setStoreName(s.store_name)).catch(() => {});
@@ -101,6 +103,17 @@ export default function AppLayout() {
           <Typography variant="h6" sx={{ flex: '1 1 0', minWidth: 0, mr: 1, fontSize: { xs: 16, sm: 20 }, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {storeName || 'MediStock'}
           </Typography>
+          {trialDaysLeft !== null && (
+            <Chip
+              size="small"
+              color={trialDaysLeft >= 7 ? 'success' : trialDaysLeft >= 3 ? 'warning' : 'error'}
+              label={`🎁 Trial: ${trialDaysLeft}d left`}
+              component={Link}
+              to="/subscription"
+              clickable
+              sx={{ mr: 1.5, fontWeight: 700 }}
+            />
+          )}
           <Chip
             size="small"
             color={user.role === 'owner' ? 'primary' : 'default'}

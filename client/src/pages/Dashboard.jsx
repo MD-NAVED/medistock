@@ -15,6 +15,7 @@ import { fmt, fmtQty } from '../utils';
 import { useAuth } from '../auth';
 import { tierAllows, userTier } from '../tiers';
 import UpgradeDialog from '../components/UpgradeDialog';
+import TrialBanner from '../components/TrialBanner';
 
 function StatCard({ icon, title, value, color, link, linkLabel }) {
   return (
@@ -83,6 +84,7 @@ export default function Dashboard() {
 
   return (
     <Box>
+      <TrialBanner />
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1.5, mb: 3 }}>
         <Typography variant="h5">Dashboard</Typography>
         <Button

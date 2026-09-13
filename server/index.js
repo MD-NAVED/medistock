@@ -289,6 +289,11 @@ function ensureSchema() {
       await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS platform_admin INTEGER NOT NULL DEFAULT 0');
       // settings.id used to be pinned to 1; per-store rows need that check gone.
       try { await pool.query('ALTER TABLE settings DROP CONSTRAINT settings_id_check'); } catch { /* already dropped */ }
+      // Scope medicine name+company uniqueness per-store instead of globally
+      try {
+        await pool.query('ALTER TABLE medicines DROP CONSTRAINT IF EXISTS unique_medicine_company');
+        await pool.query('ALTER TABLE medicines ADD CONSTRAINT unique_medicine_company_store UNIQUE (name, company, store_id)');
+      } catch { /* already migrated */ }
 
       // One-time migration: pull every orphan (pre-multi-tenant) row into the
       // default store created from the original single-tenant settings row.
@@ -376,7 +381,7 @@ function requireAuth(req, res, next) {
     const token = h.startsWith('Bearer ') ? h.slice(7) : null;
     if (!token) return res.status(401).json({ error: 'Not logged in', code: 'session_invalid' });
     return pool.query(
-      "SELECT s.token, u.id, u.username, u.name, u.role, u.active, u.store_id, u.platform_admin, t.status AS tenant_status, t.tier AS tenant_tier, t.trial_ends_at, t.subscription_ends_at FROM sessions s JOIN users u ON u.id = s.user_id LEFT JOIN tenants t ON t.id = u.store_id WHERE s.token = $1 AND s.expires_at > now()",
+      "SELECT s.token, u.id, u.username, u.name, u.role, u.active, u.store_id, u.platform_admin, t.status AS tenant_status, t.plan AS tenant_plan, t.tier AS tenant_tier, t.trial_ends_at, t.subscription_ends_at FROM sessions s JOIN users u ON u.id = s.user_id LEFT JOIN tenants t ON t.id = u.store_id WHERE s.token = $1 AND s.expires_at > now()",
       [token]
     ).then(({ rows }) => {
       const row = rows[0];
@@ -385,7 +390,9 @@ function requireAuth(req, res, next) {
       }
       pool.query('UPDATE sessions SET last_seen = now() WHERE token = $1', [token]).catch(() => {});
       req.user = { id: row.id, username: row.username, name: row.name, role: row.role,
-                   storeId: row.store_id, platformAdmin: row.platform_admin === 1 };
+                   storeId: row.store_id, platformAdmin: row.platform_admin === 1,
+                   tenantStatus: row.tenant_status, tenantPlan: row.tenant_plan,
+                   trialEndsAt: row.trial_ends_at, subscriptionEndsAt: row.subscription_ends_at };
       req.storeId = row.store_id;
       req.token = token;
       // Feature tier reflects the store's actual subscription plan.
@@ -496,25 +503,26 @@ app.post('/api/auth/signup', async (req, res, next) => {
       return bad(res, 409, 'That username is already taken');
     }
 
-    // Optional referral code: if valid, grant bonus 7 days (21-day trial) and link referrer
+    // Optional referral code: if valid, grant bonus 7 days (28-day trial) and link referrer
     const refCode = String(referral_code || '').trim().toUpperCase();
     let referrerTenantId = null;
-    let trialDays = 14;
+    let trialDays = 21; // Baseline trial is 21 days
     if (refCode) {
       const refRow = (await pool.query('SELECT id FROM tenants WHERE UPPER(referral_code) = $1', [refCode])).rows[0];
       if (refRow) {
         referrerTenantId = refRow.id;
-        trialDays = 21; // Bonus trial days for using referral code!
+        trialDays = 28; // Bonus 7 days for using referral code (28 days)!
       }
     }
 
-    // 1. Create the store (tenant) with trial (14 days, or 21 with referral).
-    const tid = (await pool.query(
+    // 1. Create the store (tenant) with trial (21 days, or 28 with referral).
+    const tenantRes = (await pool.query(
       `INSERT INTO tenants (store_name, owner_name, phone, plan, status, tier, trial_ends_at, referred_by_tenant_id)
        VALUES ($1, $2, $3, 'trial', 'trial', 'elite', now() + make_interval(days => $4::int), $5)
-       RETURNING id`,
+       RETURNING id, trial_ends_at, status, plan, tier`,
       [String(store_name).trim().slice(0, 200), String(name).trim().slice(0, 200), String(phone || '').trim().slice(0, 30), trialDays, referrerTenantId]
-    )).rows[0].id;
+    )).rows[0];
+    const tid = tenantRes.id;
 
     // Generate unique referral code for the new store
     const cleanPrefix = String(store_name || 'STORE')
@@ -534,7 +542,20 @@ app.post('/api/auth/signup', async (req, res, next) => {
     // 3. Create the store owner account and log them in.
     const userId = await addUser(uname, String(password), String(name).trim(), 'owner', tid);
     const token = await createSession(userId);
-    res.json({ token, user: { id: userId, username: uname, name: String(name).trim(), role: 'owner', store_id: tid, tier: 'elite' } });
+    res.json({
+      token,
+      user: {
+        id: userId,
+        username: uname,
+        name: String(name).trim(),
+        role: 'owner',
+        store_id: tid,
+        tier: 'elite',
+        tenantStatus: tenantRes.status,
+        tenantPlan: tenantRes.plan,
+        trialEndsAt: tenantRes.trial_ends_at,
+      }
+    });
   } catch (e) { next(e); }
 });
 
@@ -567,14 +588,15 @@ app.post('/api/auth/login', loginIpLimiter, async (req, res, next) => {
     // Kill-switch & trial enforcement at the front door: a suspended or
     // expired store cannot even log in (renewal re-opens it instantly).
     let loginTier = 'starter';
+    let tenantRow = null;
     if (u.store_id) {
-      const t = (await pool.query('SELECT status, tier, trial_ends_at, subscription_ends_at FROM tenants WHERE id = $1', [u.store_id])).rows[0];
-      if (t) loginTier = t.tier || 'starter';
-      if (t) {
+      tenantRow = (await pool.query('SELECT status, plan, tier, trial_ends_at, subscription_ends_at FROM tenants WHERE id = $1', [u.store_id])).rows[0];
+      if (tenantRow) loginTier = tenantRow.tier || 'starter';
+      if (tenantRow) {
         const nowMs = Date.now();
-        const trialOver = t.status === 'trial' && t.trial_ends_at && new Date(t.trial_ends_at).getTime() < nowMs;
-        const subOver = t.status === 'active' && t.subscription_ends_at && new Date(t.subscription_ends_at).getTime() < nowMs;
-        if (t.status === 'suspended' || t.status === 'expired' || trialOver || subOver) {
+        const trialOver = tenantRow.status === 'trial' && tenantRow.trial_ends_at && new Date(tenantRow.trial_ends_at).getTime() < nowMs;
+        const subOver = tenantRow.status === 'active' && tenantRow.subscription_ends_at && new Date(tenantRow.subscription_ends_at).getTime() < nowMs;
+        if (tenantRow.status === 'suspended' || tenantRow.status === 'expired' || trialOver || subOver) {
           return res.status(403).json({
             error: 'Your store account is locked — trial ended or payment pending. Contact MediStock support to renew.',
             code: 'subscription_locked',
@@ -584,7 +606,22 @@ app.post('/api/auth/login', loginIpLimiter, async (req, res, next) => {
     }
 
     const token = await createSession(u.id);
-    res.json({ token, user: { id: u.id, username: u.username, name: u.name, role: u.role, platform_admin: u.platform_admin === 1, store_id: u.store_id, tier: loginTier } });
+    res.json({
+      token,
+      user: {
+        id: u.id,
+        username: u.username,
+        name: u.name,
+        role: u.role,
+        platform_admin: u.platform_admin === 1,
+        store_id: u.store_id,
+        tier: loginTier,
+        tenantStatus: tenantRow?.status,
+        tenantPlan: tenantRow?.plan,
+        trialEndsAt: tenantRow?.trial_ends_at,
+        subscriptionEndsAt: tenantRow?.subscription_ends_at,
+      }
+    });
   } catch (e) { next(e); }
 });
 
@@ -1068,7 +1105,8 @@ app.post('/api/sales', requireAuth, billingLimiter, async (req, res, next) => {
       if (!Number.isInteger(Number(it.quantity)) || Number(it.quantity) <= 0)
         return bad(res, 400, 'Invalid quantity');
     }
-    const settings = (await pool.query('SELECT * FROM settings WHERE id = 1')).rows[0];
+    const settings = (await pool.query('SELECT * FROM settings WHERE store_id = $1', [req.storeId])).rows[0]
+      || (await pool.query('SELECT * FROM settings WHERE id = 1')).rows[0];
     const gstEnabled = !!settings?.gst_enabled;
     const custName = String(customer_name || '').trim();
     const custPhone = String(customer_phone || '').replace(/[^\d+]/g, '').slice(0, 20);
@@ -1575,7 +1613,7 @@ app.get('/api/whatsapp/summary', requireAuth, requireFeature('whatsapp_summary')
         "SELECT COALESCE(SUM(CASE WHEN bal > 0 THEN bal ELSE 0 END), 0)::float8 AS due, COUNT(*) FILTER (WHERE bal > 0.004)::int AS customers FROM (SELECT c.id, COALESCE(SUM(CASE l.kind WHEN 'credit' THEN l.amount ELSE -l.amount END), 0)::float8 AS bal FROM customers c LEFT JOIN customer_ledger l ON l.customer_id = c.id WHERE c.store_id = $1 GROUP BY c.id) t",
         [req.storeId]
       ),
-      pool.query('SELECT store_name FROM settings WHERE id = 1'),
+      pool.query('SELECT store_name FROM settings WHERE store_id = $1', [req.storeId]),
     ]);
 
     const t = today.rows[0];

@@ -31,3 +31,10 @@ export function tierAllows(tier, feature) {
 }
 
 export const userTier = (user) => user?.tier || 'starter';
+
+export function getTrialDaysRemaining(user) {
+  if (!user || user.tenantStatus !== 'trial' || !user.trialEndsAt) return null;
+  const ms = new Date(user.trialEndsAt).getTime() - Date.now();
+  if (ms <= 0) return 0;
+  return Math.ceil(ms / (1000 * 60 * 60 * 24));
+}

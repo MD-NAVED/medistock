@@ -65,7 +65,7 @@ export default function Referrals() {
     if (!data) return '#';
     const text =
       `🏥 *Namaste!* Main apni pharmacy ke liye *MediStock* pharmacy billing & stock management software use kar raha hoon.\n\n` +
-      `✨ Agar aap bhi register karna chahte hain toh mere referral link se karein aur paayein *21 Din ka Free Trial* (7 Din Extra Free!):\n` +
+      `✨ Agar aap bhi register karna chahte hain toh mere referral link se karein aur paayein *28 Din ka Free Trial* (7 Din Extra Free!):\n` +
       `👉 ${data.referral_link}\n\n` +
       `*Referral Code:* ${data.referral_code}\n\n` +
       `Camera invoice scanner, WhatsApp bills, aur expiry alerts sab available hai! Try karke dekhein.`;
@@ -144,7 +144,7 @@ export default function Referrals() {
               </Typography>
             </Stack>
             <Typography variant="body2" sx={{ opacity: 0.9, lineHeight: 1.6, mb: 2 }}>
-              Invite other pharmacy & medical store owners to MediStock. When they subscribe to any plan, you earn a <b>15% cash commission (up to ₹2,250 per store)</b> directly into your wallet. Your friends get an extended <b>21-Day Free Trial</b>!
+              Invite other pharmacy & medical store owners to MediStock. When they subscribe to any plan, you earn a <b>15% cash commission (up to ₹2,250 per store)</b> directly into your wallet. Your friends get an extended <b>28-Day Free Trial</b>!
             </Typography>
 
             <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5, alignItems: 'center' }}>

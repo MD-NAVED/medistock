@@ -86,13 +86,13 @@ export default function SignUp() {
             </Avatar>
             <Typography variant="h5">MediStock</Typography>
             <Typography variant="body2" color="text.secondary">
-              Register your store — {refInfo ? '🎁 21-Day Extended Free Trial' : '14-Day Free Trial'}
+              Register your store — {refInfo ? '🎁 28-Day Extended Free Trial' : '21-Day Free Trial'}
             </Typography>
           </Box>
 
           {refInfo && (
             <Alert severity="success" icon={<CardGiftcardIcon />} sx={{ mb: 2 }}>
-              🎉 <b>Referral Bonus Active!</b> Invited by <b>{refInfo.store_name}</b>. You get an extended <b>21-Day Free Trial</b>!
+              🎉 <b>Referral Bonus Active!</b> Invited by <b>{refInfo.store_name}</b>. You get an extended <b>28-Day Free Trial</b>!
             </Alert>
           )}
 
@@ -153,7 +153,7 @@ export default function SignUp() {
               sx={{ mb: 3 }}
             />
             <Button type="submit" variant="contained" size="large" fullWidth startIcon={<LoginIcon />} disabled={busy}>
-              {busy ? 'Creating Your Store…' : `Create Store & Start Free ${refInfo ? '21-Day' : '14-Day'} Trial`}
+              {busy ? 'Creating Your Store…' : `Create Store & Start Free ${refInfo ? '28-Day' : '21-Day'} Trial`}
             </Button>
           </form>
 

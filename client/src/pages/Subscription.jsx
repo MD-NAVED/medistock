@@ -10,6 +10,7 @@ import RocketLaunchIcon from '@mui/icons-material/RocketLaunch';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { api } from '../api';
 import { useAuth } from '../auth';
+import TrialBanner from '../components/TrialBanner';
 
 /**
  * In-app subscription renewal with the 3-tier pricing ladder
@@ -164,6 +165,7 @@ export default function Subscription() {
 
   return (
     <Box sx={{ maxWidth: 980, mx: 'auto' }}>
+      <TrialBanner showUpgradeButton={false} />
       {locked && (
         <Alert severity="error" sx={{ mb: 2 }}>
           Your trial or subscription has ended — your store is locked.
