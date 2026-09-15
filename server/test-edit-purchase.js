@@ -182,6 +182,29 @@ const BATCH_B = `BTCH-B-${STAMP}`;
   const ba6 = batches6.find((b) => b.batch_number === BATCH_A2);
   check('A2 still 5 after refused edit (rollback)', ba6 && ba6.quantity === 5, JSON.stringify(ba6));
 
+  // ---- Scenario 6: Duplicate invoice protection (409 INVOICE_EXISTS) ----
+  const dupePost = await call('/api/purchases', { method: 'POST', token: owner, body: {
+    supplier_name: 'Dupe Supplier',
+    invoice_number: `EDTHROW-${STAMP}`, // Same invoice as pidThrow!
+    items: [
+      { medicine_id: medA, batch_number: `DUPE-${STAMP}`, expiry_date: '2028-12-31', quantity: 5, buy_price: 10 },
+    ],
+  } });
+  check('duplicate invoice POST returns 409', dupePost.status === 409, JSON.stringify(dupePost.data));
+  check('duplicate invoice returns code INVOICE_EXISTS', dupePost.data?.code === 'INVOICE_EXISTS', JSON.stringify(dupePost.data));
+  check('duplicate invoice returns existing_purchase_id', dupePost.data?.existing_purchase_id === pidThrow, JSON.stringify(dupePost.data));
+  check('duplicate invoice error message warns about stock doubling', /double your stock/i.test(String(dupePost.data?.error || '')), JSON.stringify(dupePost.data));
+
+  // PUT conflict: trying to rename pid's invoice to pidThrow's invoice number
+  const putDupe = await call('/api/purchases/' + pid, { method: 'PUT', token: owner, body: {
+    supplier_name: 'Rename Dupe',
+    invoice_number: `EDTHROW-${STAMP}`,
+    items: [
+      { medicine_id: medA, batch_number: BATCH_A2, expiry_date: '2028-06-30', quantity: 5, buy_price: 13 },
+    ],
+  } });
+  check('PUT with conflicting invoice number returns 409', putDupe.status === 409, JSON.stringify(putDupe.data));
+
   printResults();
 })().catch((e) => {
   console.error('Unhandled error:', e);

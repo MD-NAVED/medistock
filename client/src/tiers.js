@@ -20,7 +20,7 @@ export const FEATURE_LABELS = {
   import: 'Excel/CSV data import',
   reports: 'Full sales & purchase reports',
   staff_unlimited: 'Unlimited staff accounts',
-  scanner: 'Camera invoice scanner',
+  scanner: 'AI Invoice Scanner (Beta)',
   whatsapp_summary: 'WhatsApp daily business summary',
 };
 

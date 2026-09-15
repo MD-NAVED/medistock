@@ -190,7 +190,7 @@ Every bill in **Reports** opens a detail view with the two corrections a counter
   same units back out of stock. If any of that stock has already been sold, the reversal is
   refused with an exact count rather than pushing a batch negative.
 - Full purchase history with supplier tracking
-- *(📷 Camera invoice scanning planned for future update)*
+- **AI Invoice Scanner (Beta)** — scan machine-printed supplier bills directly into purchase draft with fuzzy medicine matching and duplicate purchase prevention
 
 ### ⚠️ Alerts
 - **Low stock**: medicines below their alert threshold
@@ -361,7 +361,7 @@ separately so nothing is hidden — you can see both the clean number and what w
 
 ## 🔜 Future Updates (Roadmap)
 
-- 📷 **Camera invoice scanning** — point camera at supplier bill, auto-fill purchase
+- 📷 **Server-side Gemini Vision OCR** — upgrade from client-side Beta OCR to multimodal server-side vision parser for handwritten bills and multi-column invoices
 - 🏷️ **Barcode scanning** — scan medicine barcode at billing
 - 💳 **Subscription management** — plans by store size
 - 📱 **Mobile app** — for storekeepers on the go

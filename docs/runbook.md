@@ -189,4 +189,45 @@ Whenever a client-side fix (UI, service worker, caching, Sentry) requires a new 
    - Verify Subscription page reflects current store plan (`Starter`).
    - Verify no service worker TypeErrors in DevTools console (`chrome://inspect`).
 
+### F. AI Camera & PDF Invoice Scanner (Beta) Architecture & Operational Guardrails
 
+#### 1. Architecture & Multi-Source Ingestion
+- **Input Channels**:
+  1. **Direct Camera Capture**: `<input accept="image/*" capture="environment">` invokes device camera directly.
+  2. **Gallery & PDF Files Picker**: `<input accept="image/*,.pdf,application/pdf">` (without `capture`) opens native media gallery and file system document picker for WhatsApp-received distributor invoices.
+- **Engines**:
+  - **OCR Engine**: Client-side optical character recognition via `tesseract.js` v5 WebAssembly (WASM).
+  - **PDF Engine**: Client-side PDF rendering via Mozilla `pdfjs-dist` (pinned version `4.10.38`).
+- **Supported Formats**: Standard machine-printed wholesale distributor invoices with tabular layouts (Item name, Batch, Expiry, Qty, Rate).
+- **Unsupported Formats**: Handwritten bills, doctor prescriptions, and scribbled slips are NOT supported by the regex-based line parser.
+
+#### 2. Mozilla PDF.js Worker Version Pinning
+- **Worker CDN Pinning**: In `pdfProcessor.js`, the worker URL is pinned to the exact version string matching `client/package.json`:
+  `https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs`
+- **Rationale**: Floating versions (e.g., `^4.10.38`) could resolve incompatible worker code if jsDelivr serves an updated minor/patch with breaking API shifts, causing widespread scanner failures across chemist devices simultaneously.
+
+#### 3. Budget Phone Memory Management & Multi-Page Guardrails
+- **Sequential Processing & Disposal**: Multi-page PDFs are processed strictly one page at a time. The system renders Page $i$ to an off-screen `<canvas>` at 1.5x–2.0x scale (capped at 1600px width), runs OCR, and immediately invokes `page.cleanup()` while zeroing canvas dimensions (`canvas.width = 0; canvas.height = 0`). This ensures zero memory accumulation across pages on 2GB–4GB RAM phones.
+- **10-Page Ingestion Limit**: Invoices exceeding 10 pages are rejected upfront (`Invoice too long (maximum 10 pages) — please split or contact support`) to prevent mobile browser memory exhaustion.
+- **Gallery/Camera Compression**: High-resolution camera and gallery photos pass through canvas-based `compressImage()` downsampling (1280px max width at 0.8 JPEG quality, ~250KB–350KB payload) with EXIF orientation normalization.
+
+#### 4. CDN Dependencies & Offline Failure Modes
+- `tesseract.js` loads `tesseract-core.wasm` and `eng.traineddata.gz` from jsDelivr CDN.
+- `pdfjs-dist` loads `pdf.worker.min.mjs` and CMaps from jsDelivr CDN.
+- **Failure Mode**: On high-latency 2G/3G mobile networks or blocked CDNs, worker initialization will timeout or fail.
+- **Behavior**: The exception is caught cleanly in `handleScanInvoice()`, file inputs are reset, and an actionable snackbar advises the user to proceed with manual entry without breaking POS stability.
+
+#### 5. Password-Protected & Encrypted PDF Handling
+- When encrypted distributor PDFs are uploaded, `pdfjs-dist` triggers `onPassword` or throws `PasswordException`.
+- The exception is mapped to a chemist-friendly error message: *"Ye PDF password-protected hai — unlock karke try karo"* instead of a cryptic JavaScript stack trace.
+
+#### 6. Strict Data Integrity (No Silent Defaults)
+- **Elimination of Fallbacks**: The parser never injects default placeholder data. Unrecognized fields (`medicine_id`, `batch_number`, `expiry_date`, `quantity`, `buy_price`) remain blank (`''`).
+- **Visual Verification**: All blank or malformed lines are highlighted with red validation borders (`error` state) and require user confirmation before `Save & Update Stock` is enabled.
+- **Candidate Fuzzy Matching**: Medicine name matches with confidence between 25% and 59% display top-3 clickable candidate chips for chemist selection instead of silently picking an arbitrary catalog item.
+
+#### 7. Duplicate Invoice & Stock-Doubling Defense
+- **Store-Scoped Unique Index**: `idx_purchases_store_invoice ON purchases (store_id, invoice_number)`.
+- **Conflict Handling**: Repeatedly scanning or saving the same invoice number triggers a PostgreSQL `23505` unique violation.
+- **API Contract**: The backend traps this violation and responds with `HTTP 409 Conflict`, code `INVOICE_EXISTS`, and the `existing_purchase_id`.
+- **Reconciliation Flow**: The UI displays a warning dialog ("Invoice Already Exists") with an option to **Update Existing Purchase** (`PUT /api/purchases/:id`). Updating recalculates net stock deltas rather than blindly doubling quantities.

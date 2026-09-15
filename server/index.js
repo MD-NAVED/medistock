@@ -294,6 +294,12 @@ function ensureSchema() {
         await pool.query('ALTER TABLE medicines DROP CONSTRAINT IF EXISTS unique_medicine_company');
         await pool.query('ALTER TABLE medicines ADD CONSTRAINT unique_medicine_company_store UNIQUE (name, company, store_id)');
       } catch { /* already migrated */ }
+      // Scope purchase invoice numbers per-store (prevent accidental duplicate entries & stock doubling)
+      try {
+        await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS idx_purchases_store_invoice ON purchases (store_id, invoice_number)');
+      } catch (e) {
+        console.warn('idx_purchases_store_invoice index note:', e.message);
+      }
 
       // One-time migration: pull every orphan (pre-multi-tenant) row into the
       // default store created from the original single-tenant settings row.
@@ -985,7 +991,19 @@ app.post('/api/purchases', requireAuth, async (req, res, next) => {
     });
     res.json({ id: purchaseId, total });
   } catch (e) {
-    if (String(e.message).includes('unique_constraint') || String(e.message).includes('duplicate key')) {
+    if (e.code === '23505' || String(e.message).includes('unique_constraint') || String(e.message).includes('duplicate key')) {
+      if (e.constraint === 'idx_purchases_store_invoice' || String(e.detail || '').includes('invoice_number') || String(e.message).includes('idx_purchases_store_invoice')) {
+        const inv = String(req.body?.invoice_number || '').trim();
+        const existing = (await pool.query(
+          'SELECT id FROM purchases WHERE store_id = $1 AND invoice_number = $2',
+          [req.storeId, inv]
+        )).rows[0];
+        return res.status(409).json({
+          error: 'Invoice number already exists for this store. Re-adding will double your stock — are you sure?',
+          code: 'INVOICE_EXISTS',
+          existing_purchase_id: existing?.id || null,
+        });
+      }
       return bad(res, 409, 'Duplicate batch entry in this purchase');
     }
     next(e);
@@ -1087,7 +1105,10 @@ app.put('/api/purchases/:id', requireAuth, requireOwner, async (req, res, next) 
     });
     res.json({ id: p.id, total });
   } catch (e) {
-    if (String(e.message).includes('unique_constraint') || String(e.message).includes('duplicate key')) {
+    if (e.code === '23505' || String(e.message).includes('unique_constraint') || String(e.message).includes('duplicate key')) {
+      if (e.constraint === 'idx_purchases_store_invoice' || String(e.detail || '').includes('invoice_number') || String(e.message).includes('idx_purchases_store_invoice')) {
+        return bad(res, 409, 'Invoice number already exists for another purchase in this store');
+      }
       return bad(res, 409, 'Duplicate batch entry in this purchase');
     }
     next(e);

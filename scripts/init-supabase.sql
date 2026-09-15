@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS batches (
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS purchases (
   id             SERIAL PRIMARY KEY,
+  store_id       INTEGER,
   invoice_number VARCHAR(255) NOT NULL,
   supplier_name  TEXT NOT NULL DEFAULT '',
   user_id        INTEGER NOT NULL REFERENCES users(id),
@@ -238,6 +239,7 @@ CREATE INDEX IF NOT EXISTS idx_login_attempts_user ON login_attempts(username, c
 CREATE INDEX IF NOT EXISTS idx_customer_ledger_customer ON customer_ledger(customer_id);
 CREATE INDEX IF NOT EXISTS idx_customer_ledger_customer_created ON customer_ledger(customer_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_purchases_store_invoice ON purchases(store_id, invoice_number);
 
 -- ----------------------------------------------------------------------------
 -- Seed Store Settings (Default)

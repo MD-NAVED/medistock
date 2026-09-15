@@ -12,14 +12,17 @@ import SaveIcon from '@mui/icons-material/Save';
 import UndoIcon from '@mui/icons-material/Undo';
 import EditIcon from '@mui/icons-material/Edit';
 import PhotoCameraIcon from '@mui/icons-material/PhotoCamera';
+import UploadFileIcon from '@mui/icons-material/UploadFile';
 import DocumentScannerIcon from '@mui/icons-material/DocumentScanner';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import { api } from '../api';
 import { useAuth } from '../auth';
 import { tierAllows, userTier } from '../tiers';
 import UpgradeDialog from '../components/UpgradeDialog';
 import DateRangeFilter from '../components/DateRangeFilter';
 import { fmt, fmtDate, fmtDateTime, todayStr } from '../utils';
-import { parseInvoiceImage } from '../utils/invoiceParser';
+import { parseInvoiceFile } from '../utils/invoiceParser';
 
 const EMPTY_LINE = { medicine_id: null, batch_number: '', expiry_date: '', quantity: '', buy_price: '' };
 const EMPTY_HEAD = { supplier_name: '', invoice_number: '', date: '' };
@@ -83,7 +86,11 @@ export default function Purchases() {
   const [scanProgress, setScanProgress] = useState(0);
   const [scanStatus, setScanStatus] = useState('');
   const [scannedNotice, setScannedNotice] = useState(false);
-  const fileInputRef = useRef(null);
+  const [infoOpen, setInfoOpen] = useState(false);
+  const [dupeDialog, setDupeDialog] = useState(null);
+  const cameraInputRef = useRef(null);
+  const fileUploadRef = useRef(null);
+  const [scanProgressMeta, setScanProgressMeta] = useState({ page: 0, totalPages: 0, stage: '', thumbnails: [] });
   const [upgrade, setUpgrade] = useState(null);
   const can = (f) => tierAllows(userTier(user), f);
 
@@ -98,7 +105,8 @@ export default function Purchases() {
 
     setScanBusy(true);
     setScanProgress(5);
-    setScanStatus('Loading invoice image…');
+    setScanStatus('Reading invoice file…');
+    setScanProgressMeta({ page: 0, totalPages: 0, stage: 'init', thumbnails: [] });
 
     try {
       let medList = medicines;
@@ -107,9 +115,10 @@ export default function Purchases() {
         setMedicines(medList);
       }
 
-      const parsed = await parseInvoiceImage(file, medList, (status, pct) => {
+      const parsed = await parseInvoiceFile(file, medList, (status, pct, meta) => {
         setScanStatus(status);
-        setScanProgress(pct);
+        if (typeof pct === 'number') setScanProgress(pct);
+        if (meta) setScanProgressMeta((prev) => ({ ...prev, ...meta }));
       });
 
       setHead({
@@ -120,11 +129,13 @@ export default function Purchases() {
 
       if (parsed.items && parsed.items.length > 0) {
         setLines(parsed.items.map((it) => ({
-          medicine_id: it.medicine_id,
-          batch_number: it.batch_number,
-          expiry_date: it.expiry_date,
-          quantity: it.quantity,
-          buy_price: it.buy_price,
+          medicine_id: it.medicine_id || null,
+          batch_number: it.batch_number || '',
+          expiry_date: it.expiry_date || '',
+          quantity: it.quantity || '',
+          buy_price: it.buy_price || '',
+          candidates: it.candidates || [],
+          lowConfidence: it.lowConfidence || false,
         })));
       } else {
         setLines([{ ...EMPTY_LINE }]);
@@ -137,7 +148,8 @@ export default function Purchases() {
       setSnack({ severity: 'error', message: err.message || 'Invoice scan failed. Please enter details manually.' });
     } finally {
       setScanBusy(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
+      if (cameraInputRef.current) cameraInputRef.current.value = '';
+      if (fileUploadRef.current) fileUploadRef.current.value = '';
     }
   };
 
@@ -211,7 +223,14 @@ export default function Purchases() {
       setOpen(false);
       load();
     } catch (e) {
-      setSnack({ severity: 'error', message: e.message });
+      if (e.status === 409 && (e.code === 'INVOICE_EXISTS' || e.message?.includes('already exists'))) {
+        setDupeDialog({
+          message: e.message,
+          existingId: e.existing_purchase_id,
+        });
+      } else {
+        setSnack({ severity: 'error', message: e.message });
+      }
     } finally {
       setBusy(false);
     }
@@ -225,14 +244,16 @@ export default function Purchases() {
     l.medicine_id && l.batch_number.trim() && /^\d{4}-\d{2}-\d{2}$/.test(l.expiry_date) && Number(l.quantity) > 0 && Number(l.buy_price) >= 0
   );
 
-  const openEdit = () => {
-    if (!detail) return;
+  const openEdit = (customDetail) => {
+    const d = customDetail || detail;
+    if (!d) return;
+    if (d.purchase && d.purchase.id) setDetailId(d.purchase.id);
     setEditHead({
-      supplier_name: detail.purchase.supplier_name || '',
-      invoice_number: detail.purchase.invoice_number || '',
+      supplier_name: d.purchase.supplier_name || '',
+      invoice_number: d.purchase.invoice_number || '',
       date: '',
     });
-    setEditLines(detail.items.map((it) => ({
+    setEditLines(d.items.map((it) => ({
       medicine_id: it.medicine_id,
       batch_number: it.batch_number,
       expiry_date: it.expiry_date,
@@ -297,8 +318,9 @@ export default function Purchases() {
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 2, flexWrap: 'wrap', gap: { xs: 1.5, md: 2 } }}>
         <Typography variant="h5" sx={{ flexGrow: 1, fontSize: { xs: 20, md: 24 } }}>Purchases — Stock In</Typography>
         
+        {/* 1. Camera Input (direct capture) */}
         <input
-          ref={fileInputRef}
+          ref={cameraInputRef}
           type="file"
           accept="image/*"
           capture="environment"
@@ -306,24 +328,57 @@ export default function Purchases() {
           onChange={handleScanInvoice}
         />
 
-        <Button
-          variant="contained"
-          color="secondary"
-          startIcon={<PhotoCameraIcon />}
-          onClick={() => fileInputRef.current?.click()}
-          disabled={scanBusy}
-          sx={{ whiteSpace: 'nowrap', bgcolor: '#7b1fa2', '&:hover': { bgcolor: '#6a1b9a' } }}
-        >
-          {scanBusy ? 'Scanning…' : (isMobile ? 'Scan Invoice' : 'Scan Bill (Camera/Image)')}
-        </Button>
+        {/* 2. Gallery / PDF Upload Input (native file/gallery picker, no capture) */}
+        <input
+          ref={fileUploadRef}
+          type="file"
+          accept="image/*,.pdf,application/pdf"
+          style={{ display: 'none' }}
+          onChange={handleScanInvoice}
+        />
+
+        <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+          <Button
+            variant="contained"
+            color="secondary"
+            startIcon={<PhotoCameraIcon />}
+            onClick={() => cameraInputRef.current?.click()}
+            disabled={scanBusy}
+            sx={{ whiteSpace: 'nowrap', bgcolor: '#7b1fa2', '&:hover': { bgcolor: '#6a1b9a' } }}
+          >
+            {scanBusy ? 'Scanning…' : '📷 Camera se Scan'}
+          </Button>
+
+          <Button
+            variant="outlined"
+            color="secondary"
+            startIcon={<UploadFileIcon />}
+            onClick={() => fileUploadRef.current?.click()}
+            disabled={scanBusy}
+            sx={{
+              whiteSpace: 'nowrap',
+              borderColor: '#7b1fa2',
+              color: '#7b1fa2',
+              '&:hover': { borderColor: '#4a148c', bgcolor: 'rgba(123,31,162,0.04)' },
+            }}
+          >
+            📁 Gallery / PDF se Upload
+          </Button>
+
+          <Tooltip title="AI Scanner (Beta) guide & tips">
+            <IconButton size="small" onClick={() => setInfoOpen(true)} sx={{ color: '#7b1fa2' }}>
+              <InfoOutlinedIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </Box>
 
         <Button variant="contained" startIcon={<AddIcon />} onClick={openDialog} sx={{ whiteSpace: 'nowrap' }}>
           {isMobile ? 'Manual Entry' : 'Manual Purchase Entry'}
         </Button>
       </Box>
 
-      <Alert severity="success" icon={<DocumentScannerIcon />} sx={{ mb: 2 }}>
-        📷 <b>Smart Camera Invoice Scanning Enabled</b>: Take a photo or upload a supplier bill to automatically extract items, batches & prices for review.
+      <Alert severity="info" icon={<DocumentScannerIcon />} sx={{ mb: 2 }}>
+        📷 <b>AI Invoice Scanner (Beta) Enabled</b>: Camera photo, Gallery image, ya PDF e-invoice upload karke medicines, batches & rates automatically extract karein.
       </Alert>
 
       <Box sx={{ mb: 2 }}>
@@ -482,8 +537,8 @@ export default function Purchases() {
         <DialogTitle>New Purchase — add stock by batch</DialogTitle>
         <DialogContent sx={{ pt: '8px !important' }}>
           {scannedNotice && (
-            <Alert severity="info" sx={{ mb: 2, mt: 1 }}>
-              ✨ <b>Scanned from Invoice</b>: Supplier details, batch numbers, quantities, and prices pre-filled below. Please review and adjust any field before saving to update stock.
+            <Alert severity="warning" sx={{ mb: 2, mt: 1 }}>
+              ⚠️ <b>Scanned from Invoice (Beta)</b>: Please review extracted items. Empty or low-confidence fields are highlighted in red and must be verified before saving.
             </Alert>
           )}
           <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 2, mt: 1 }}>
@@ -499,7 +554,7 @@ export default function Purchases() {
               {lines.map((l, i) => {
                 const med = medicines.find((m) => m.id === l.medicine_id);
                 return (
-                  <Paper key={i} sx={{ p: 2, mb: 2, bgcolor: '#fafbfb' }}>
+                  <Paper key={i} sx={{ p: 2, mb: 2, bgcolor: '#fafbfb', border: (scannedNotice && !l.medicine_id) ? '1px solid #d32f2f' : '1px solid #e0e6e4' }}>
                     <Box sx={{ display: 'flex', alignItems: 'center', mb: 1.5 }}>
                       <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>Item {i + 1}</Typography>
                       <IconButton size="small" color="error" disabled={lines.length === 1}
@@ -509,20 +564,55 @@ export default function Purchases() {
                     </Box>
                     <Autocomplete
                       size="small" options={medicines} value={med || null} fullWidth
-                      onChange={(e, v) => setLine(i, { medicine_id: v ? v.id : null, buy_price: v ? v.buy_price : l.buy_price })}
+                      onChange={(e, v) => setLine(i, { medicine_id: v ? v.id : null, buy_price: v ? String(v.buy_price) : l.buy_price, candidates: [] })}
                       getOptionLabel={(o) => `${o.name} — ${o.company}`}
-                      renderInput={(p) => <TextField {...p} label="Select medicine" />}
-                      sx={{ mb: 2 }}
+                      renderInput={(p) => (
+                        <TextField
+                          {...p}
+                          label="Select medicine *"
+                          error={scannedNotice && !l.medicine_id}
+                          helperText={scannedNotice && !l.medicine_id ? 'Please verify this field' : ''}
+                        />
+                      )}
+                      sx={{ mb: 1 }}
                     />
+                    {scannedNotice && l.candidates && l.candidates.length > 0 && !l.medicine_id && (
+                      <Box sx={{ mb: 1.5, display: 'flex', flexWrap: 'wrap', gap: 0.5, alignItems: 'center' }}>
+                        <Typography variant="caption" sx={{ color: 'warning.dark', fontWeight: 600 }}>Top suggestions:</Typography>
+                        {l.candidates.map((c) => (
+                          <Chip
+                            key={c.id}
+                            size="small"
+                            variant="outlined"
+                            color="primary"
+                            label={`${c.name} (${c.company || 'Generic'})`}
+                            onClick={() => setLine(i, {
+                              medicine_id: c.id,
+                              buy_price: c.buy_price ? String(c.buy_price) : l.buy_price,
+                              candidates: [],
+                            })}
+                            sx={{ fontSize: 11, cursor: 'pointer' }}
+                          />
+                        ))}
+                      </Box>
+                    )}
                     <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
-                      <TextField size="small" label="Batch #" value={l.batch_number}
+                      <TextField size="small" label="Batch # *" value={l.batch_number}
+                        error={scannedNotice && !l.batch_number.trim()}
+                        helperText={scannedNotice && !l.batch_number.trim() ? 'Please verify' : ''}
                         onChange={(e) => setLine(i, { batch_number: e.target.value })} placeholder="e.g. AB1234" />
-                      <TextField size="small" label="Expiry" type="date" value={l.expiry_date}
+                      <TextField size="small" label="Expiry *" type="date" value={l.expiry_date}
+                        error={scannedNotice && !/^\d{4}-\d{2}-\d{2}$/.test(l.expiry_date)}
+                        helperText={scannedNotice && !/^\d{4}-\d{2}-\d{2}$/.test(l.expiry_date) ? 'Please verify' : ''}
                         InputLabelProps={{ shrink: true }}
                         onChange={(e) => setLine(i, { expiry_date: e.target.value })} />
-                      <TextField size="small" label="Qty" type="number" value={l.quantity}
+                      <TextField size="small" label="Qty *" type="number" value={l.quantity}
+                        error={scannedNotice && !(Number(l.quantity) > 0)}
+                        helperText={scannedNotice && !(Number(l.quantity) > 0) ? 'Please verify' : ''}
                         inputProps={{ min: 1 }} onChange={(e) => setLine(i, { quantity: e.target.value })} />
-                      <TextField size="small" label="Buy Price (₹)" type="number" value={l.buy_price}
+                      <TextField size="small" label="Buy Price (₹) *" type="number" value={l.buy_price}
+                        error={scannedNotice && !(Number(l.buy_price) >= 0 && l.buy_price !== '')}
+                        helperText={scannedNotice && !(Number(l.buy_price) >= 0 && l.buy_price !== '') ? 'Please verify' : ''}
                         inputProps={{ min: 0, step: '0.01' }} onChange={(e) => setLine(i, { buy_price: e.target.value })} />
                     </Box>
                     <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 1.5 }}>
@@ -552,18 +642,88 @@ export default function Purchases() {
                     const med = medicines.find((m) => m.id === l.medicine_id);
                     return (
                       <TableRow key={i}>
-                        <TableCell sx={{ minWidth: 240 }}>
+                        <TableCell sx={{ minWidth: 260 }}>
                           <Autocomplete
                             size="small" options={medicines} value={med || null}
-                            onChange={(e, v) => setLine(i, { medicine_id: v ? v.id : null, buy_price: v ? v.buy_price : l.buy_price })}
+                            onChange={(e, v) => setLine(i, { medicine_id: v ? v.id : null, buy_price: v ? String(v.buy_price) : l.buy_price, candidates: [] })}
                             getOptionLabel={(o) => `${o.name} — ${o.company}`}
-                            renderInput={(p) => <TextField {...p} label="Select medicine" />}
+                            renderInput={(p) => (
+                              <TextField
+                                {...p}
+                                label="Select medicine *"
+                                error={scannedNotice && !l.medicine_id}
+                                helperText={scannedNotice && !l.medicine_id ? 'Please verify this field' : ''}
+                              />
+                            )}
+                          />
+                          {scannedNotice && l.candidates && l.candidates.length > 0 && !l.medicine_id && (
+                            <Box sx={{ mt: 0.5, display: 'flex', flexWrap: 'wrap', gap: 0.5, alignItems: 'center' }}>
+                              <Typography variant="caption" sx={{ color: 'warning.dark', fontWeight: 600 }}>Top suggestions:</Typography>
+                              {l.candidates.map((c) => (
+                                <Chip
+                                  key={c.id}
+                                  size="small"
+                                  variant="outlined"
+                                  color="primary"
+                                  label={`${c.name} (${c.company || 'Generic'})`}
+                                  onClick={() => setLine(i, {
+                                    medicine_id: c.id,
+                                    buy_price: c.buy_price ? String(c.buy_price) : l.buy_price,
+                                    candidates: [],
+                                  })}
+                                  sx={{ fontSize: 11, cursor: 'pointer' }}
+                                />
+                              ))}
+                            </Box>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <TextField
+                            size="small"
+                            value={l.batch_number}
+                            error={scannedNotice && !l.batch_number.trim()}
+                            helperText={scannedNotice && !l.batch_number.trim() ? 'Please verify' : ''}
+                            onChange={(e) => setLine(i, { batch_number: e.target.value })}
+                            placeholder="e.g. AB1234"
+                            sx={{ width: 130 }}
                           />
                         </TableCell>
-                        <TableCell><TextField size="small" value={l.batch_number} onChange={(e) => setLine(i, { batch_number: e.target.value })} placeholder="e.g. AB1234" sx={{ width: 120 }} /></TableCell>
-                        <TableCell><TextField size="small" type="date" value={l.expiry_date} onChange={(e) => setLine(i, { expiry_date: e.target.value })} sx={{ width: 160 }} inputProps={{ min: '2000-01-01' }} /></TableCell>
-                        <TableCell><TextField size="small" type="number" value={l.quantity} onChange={(e) => setLine(i, { quantity: e.target.value })} inputProps={{ min: 1 }} sx={{ width: 90 }} /></TableCell>
-                        <TableCell><TextField size="small" type="number" value={l.buy_price} onChange={(e) => setLine(i, { buy_price: e.target.value })} inputProps={{ min: 0, step: '0.01' }} sx={{ width: 110 }} /></TableCell>
+                        <TableCell>
+                          <TextField
+                            size="small"
+                            type="date"
+                            value={l.expiry_date}
+                            error={scannedNotice && !/^\d{4}-\d{2}-\d{2}$/.test(l.expiry_date)}
+                            helperText={scannedNotice && !/^\d{4}-\d{2}-\d{2}$/.test(l.expiry_date) ? 'Please verify' : ''}
+                            onChange={(e) => setLine(i, { expiry_date: e.target.value })}
+                            sx={{ width: 160 }}
+                            inputProps={{ min: '2000-01-01' }}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <TextField
+                            size="small"
+                            type="number"
+                            value={l.quantity}
+                            error={scannedNotice && !(Number(l.quantity) > 0)}
+                            helperText={scannedNotice && !(Number(l.quantity) > 0) ? 'Required' : ''}
+                            onChange={(e) => setLine(i, { quantity: e.target.value })}
+                            inputProps={{ min: 1 }}
+                            sx={{ width: 100 }}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <TextField
+                            size="small"
+                            type="number"
+                            value={l.buy_price}
+                            error={scannedNotice && !(Number(l.buy_price) >= 0 && l.buy_price !== '')}
+                            helperText={scannedNotice && !(Number(l.buy_price) >= 0 && l.buy_price !== '') ? 'Required' : ''}
+                            onChange={(e) => setLine(i, { buy_price: e.target.value })}
+                            inputProps={{ min: 0, step: '0.01' }}
+                            sx={{ width: 110 }}
+                          />
+                        </TableCell>
                         <TableCell align="right" sx={{ fontWeight: 700 }}>{fmt(lineTotal(l))}</TableCell>
                         <TableCell padding="checkbox">
                           <IconButton size="small" color="error" disabled={lines.length === 1} onClick={() => setLines(lines.filter((_, idx) => idx !== i))}>
@@ -703,6 +863,125 @@ export default function Purchases() {
           <Button variant="contained" startIcon={<SaveIcon />} onClick={saveEdit} disabled={busy || !editCanSave}>
             {busy ? 'Saving…' : 'Save changes'}
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Scanner Beta Guidelines Modal */}
+      <Dialog open={infoOpen} onClose={() => setInfoOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <InfoOutlinedIcon color="primary" />
+          AI Invoice Scanner (Beta)
+        </DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ mb: 1.5 }}>
+            Our smart invoice scanner extracts medicines, batch numbers, expiry dates, and rates directly from invoice photos, gallery uploads, and PDF e-invoices.
+          </Typography>
+          <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5 }}>
+            Tips for best results:
+          </Typography>
+          <Box component="ul" sx={{ pl: 2, m: 0, fontSize: 13, color: 'text.secondary', display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+            <li><b>Machine-printed invoices only:</b> Handwritten bills or doctor slips are not currently supported.</li>
+            <li><b>Camera, Gallery & PDF:</b> Upload camera captures, gallery photos, or multi-page distributor PDF bills (up to 10 pages).</li>
+            <li><b>Photo Orientation:</b> Photo seedhi/upright ho toh OCR best kaam karega (agar ulti ya ghumai hui ho toh rotate karke upload karein).</li>
+            <li><b>PDF Support:</b> Password-protected / encrypted PDFs are unsupported — please unlock before uploading.</li>
+            <li><b>Review before saving:</b> Always verify highlighted fields (red outline) and select candidate suggestions.</li>
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setInfoOpen(false)} variant="contained">Got it</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Live Scanning & Conversion Progress Dialog with Thumbnails */}
+      <Dialog open={scanBusy} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 700, pb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+          <CircularProgress size={22} color="secondary" />
+          AI Invoice Scanner (Beta)
+        </DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ mb: 1.5, fontWeight: 500 }}>
+            {scanStatus || 'Processing invoice…'}
+          </Typography>
+          <LinearProgress variant="determinate" value={scanProgress} color="secondary" sx={{ height: 8, borderRadius: 4, mb: 1 }} />
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
+            <Typography variant="caption" color="text.secondary">
+              {scanProgressMeta?.stage ? `Stage: ${scanProgressMeta.stage}` : 'Processing…'}
+            </Typography>
+            <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>
+              {scanProgress}%
+            </Typography>
+          </Box>
+
+          {scanProgressMeta?.thumbnails && scanProgressMeta.thumbnails.length > 0 && (
+            <Box sx={{ mt: 1 }}>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1, fontWeight: 600 }}>
+                Pages ({scanProgressMeta.thumbnails.length}):
+              </Typography>
+              <Box sx={{ display: 'flex', gap: 1, overflowX: 'auto', pb: 1 }}>
+                {scanProgressMeta.thumbnails.map((thumb) => {
+                  const isActive = scanProgressMeta.page === thumb.pageNumber;
+                  const isDone = scanProgressMeta.page > thumb.pageNumber;
+                  return (
+                    <Box
+                      key={thumb.pageNumber}
+                      sx={{
+                        position: 'relative',
+                        border: isActive ? '2px solid #7b1fa2' : isDone ? '2px solid #2e7d32' : '1px solid #ccc',
+                        borderRadius: 1,
+                        p: 0.5,
+                        bgcolor: '#fff',
+                        flexShrink: 0,
+                        textAlign: 'center',
+                      }}
+                    >
+                      <img src={thumb.dataUrl} alt={`Page ${thumb.pageNumber}`} style={{ height: 80, width: 'auto', display: 'block' }} />
+                      <Typography variant="caption" sx={{ fontSize: 10, fontWeight: 700, color: isActive ? '#7b1fa2' : isDone ? '#2e7d32' : 'text.secondary' }}>
+                        P{thumb.pageNumber} {isDone ? '✓' : isActive ? '⏳' : ''}
+                      </Typography>
+                    </Box>
+                  );
+                })}
+              </Box>
+            </Box>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Duplicate Invoice Confirmation Modal */}
+      <Dialog open={!!dupeDialog} onClose={() => setDupeDialog(null)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1, color: 'warning.main' }}>
+          <WarningAmberIcon color="warning" />
+          Invoice Already Exists
+        </DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ mb: 1.5 }}>
+            {dupeDialog?.message || 'Invoice number already exists for this store. Re-adding will double your stock — are you sure?'}
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            Would you like to review and update the existing purchase instead? Updating will reconcile stock differences rather than adding duplicate quantities.
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setDupeDialog(null)} color="inherit">Cancel</Button>
+          {dupeDialog?.existingId && (
+            <Button
+              variant="contained"
+              color="warning"
+              onClick={async () => {
+                const existingId = dupeDialog.existingId;
+                setDupeDialog(null);
+                setOpen(false);
+                try {
+                  const p = await api(`/api/purchases/${existingId}`);
+                  openEdit(p);
+                } catch (e) {
+                  setSnack({ message: e.message || 'Failed to open existing purchase', severity: 'error' });
+                }
+              }}
+            >
+              Update Existing Purchase
+            </Button>
+          )}
         </DialogActions>
       </Dialog>
 

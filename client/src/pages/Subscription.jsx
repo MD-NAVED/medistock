@@ -36,7 +36,7 @@ const FEATURE_ROWS = [
   { label: 'WhatsApp bill sending', tiers: ['pro', 'elite'] },
   { label: 'Excel/CSV data import', tiers: ['pro', 'elite'] },
   { label: 'Full sales & purchase reports', tiers: ['pro', 'elite'] },
-  { label: 'Camera invoice scanner', tiers: ['elite'] },
+  { label: 'AI Invoice Scanner (Beta)', tiers: ['elite'] },
   { label: 'WhatsApp daily business summary', tiers: ['elite'] },
 ];
 
@@ -48,7 +48,7 @@ const TIER_ORDER = ['starter', 'pro', 'elite'];
 const addedFeatures = (tier) => {
   if (tier === 'elite') {
     return [
-      { label: 'Camera invoice scanner (Smart AI)' },
+      { label: 'AI Invoice Scanner (Beta)' },
       { label: 'WhatsApp daily business summary' },
       { label: 'Khata (Credit / Udhaar book)' },
       { label: 'WhatsApp bill sending' },

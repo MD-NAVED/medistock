@@ -68,7 +68,7 @@ export default function Referrals() {
       `✨ Agar aap bhi register karna chahte hain toh mere referral link se karein aur paayein *28 Din ka Free Trial* (7 Din Extra Free!):\n` +
       `👉 ${data.referral_link}\n\n` +
       `*Referral Code:* ${data.referral_code}\n\n` +
-      `Camera invoice scanner, WhatsApp bills, aur expiry alerts sab available hai! Try karke dekhein.`;
+      `AI Invoice Scanner (Beta), WhatsApp bills, aur expiry alerts sab available hai! Try karke dekhein.`;
     return 'https://wa.me/?text=' + encodeURIComponent(text);
   };
 
