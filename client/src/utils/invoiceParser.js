@@ -1,4 +1,5 @@
 import { createWorker } from 'tesseract.js';
+import { api } from '../api.js';
 
 /**
  * Normalizes date strings like "08/28", "12-2027", "15/08/2026" into YYYY-MM-DD.
@@ -316,6 +317,7 @@ export function parseInvoiceText(rawText, medicinesList = []) {
   }
 
   return {
+    engine: 'tesseract',
     supplier_name,
     invoice_number,
     date,
@@ -332,24 +334,10 @@ export function parseInvoiceText(rawText, medicinesList = []) {
  * Sends image to the new Gemini Vision server endpoint.
  */
 export async function parseInvoiceViaServer(base64Image, medicinesList) {
-  const token = localStorage.getItem('token');
-  const res = await fetch('/api/purchases/scan-invoice', {
+  const data = await api('/api/purchases/scan-invoice', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`
-    },
-    body: JSON.stringify({ image_base64: base64Image })
+    body: { image_base64: base64Image },
   });
-  if (!res.ok) {
-    let errText = 'Server error';
-    try {
-      const j = await res.json();
-      if (j.error) errText = j.error;
-    } catch(e){}
-    throw new Error(errText);
-  }
-  const data = await res.json();
   
   // Transform Gemini output to match existing Tesseract output shape
   const transformedItems = (data.items || []).map(item => {

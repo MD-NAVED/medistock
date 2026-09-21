@@ -87,6 +87,7 @@ export default function Purchases({ initialLines, initialOpen, initialScannedNot
   const [scanProgress, setScanProgress] = useState(0);
   const [scanStatus, setScanStatus] = useState('');
   const [scannedNotice, setScannedNotice] = useState(initialScannedNotice !== undefined ? initialScannedNotice : false);
+  const [scanEngine, setScanEngine] = useState(null);
   const [infoOpen, setInfoOpen] = useState(false);
   const [dupeDialog, setDupeDialog] = useState(null);
   const cameraInputRef = useRef(null);
@@ -143,6 +144,7 @@ export default function Purchases({ initialLines, initialOpen, initialScannedNot
       }
 
       setScannedNotice(true);
+      setScanEngine(parsed.engine || 'gemini');
       setOpen(true);
       setSnack({ severity: 'success', message: 'Invoice scanned! Pre-filled purchase details below for review.' });
     } catch (err) {
@@ -197,6 +199,7 @@ export default function Purchases({ initialLines, initialOpen, initialScannedNot
     setHead({ supplier_name: '', invoice_number: '', date: todayStr() });
     setLines([{ ...EMPTY_LINE }]);
     setScannedNotice(false);
+    setScanEngine(null);
     setOpen(true);
     api('/api/medicines').then(setMedicines).catch(() => {});
   };
@@ -547,8 +550,18 @@ export default function Purchases({ initialLines, initialOpen, initialScannedNot
         <DialogTitle>New Purchase — add stock by batch</DialogTitle>
         <DialogContent sx={{ pt: '8px !important' }}>
           {scannedNotice && (
-            <Alert severity="warning" sx={{ mb: 2, mt: 1 }}>
-              ⚠️ <b>Scanned from Invoice (Beta)</b>: Please review extracted items. Empty or low-confidence fields are highlighted in red and must be verified before saving.
+            <Alert severity={scanEngine === 'gemini' ? 'info' : 'warning'} sx={{ mb: 2, mt: 1 }}>
+              {scanEngine === 'gemini' ? (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                  <Chip size="small" label="✨ AI Scan (Gemini)" sx={{ bgcolor: '#f3e5f5', color: '#7b1fa2', fontWeight: 700 }} />
+                  <span><b>AI-Powered Extraction</b>: High-accuracy extraction complete. Please review extracted items before saving.</span>
+                </Box>
+              ) : (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                  <Chip size="small" label="📄 Local OCR (Fallback)" sx={{ bgcolor: '#fff3e0', color: '#e65100', fontWeight: 700 }} />
+                  <span><b>Scanned from Invoice (Beta)</b>: Please review extracted items. Empty or low-confidence fields are highlighted in red and must be verified before saving.</span>
+                </Box>
+              )}
             </Alert>
           )}
           <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 2, mt: 1 }}>
@@ -565,6 +578,7 @@ export default function Purchases({ initialLines, initialOpen, initialScannedNot
                setLine={setLine} 
                medicines={medicines} 
                scannedNotice={scannedNotice} 
+               scanEngine={scanEngine}
             />
           ) : (
             <TableContainer>

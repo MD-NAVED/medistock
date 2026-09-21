@@ -18,7 +18,7 @@ const lineTotal = (l) => {
 
 const fmt = (v) => v.toLocaleString('en-IN', { style: 'currency', currency: 'INR' });
 
-export default function MobileReviewList({ lines, setLines, setLine, medicines, scannedNotice }) {
+export default function MobileReviewList({ lines, setLines, setLine, medicines, scannedNotice, scanEngine }) {
   const [tab, setTab] = useState('needs-fix');
   const [expandedItems, setExpandedItems] = useState({});
   const itemRefs = useRef([]);
@@ -100,9 +100,17 @@ export default function MobileReviewList({ lines, setLines, setLine, medicines, 
       {/* STICKY SUMMARY HEADER */}
       <Box sx={{ position: 'sticky', top: 0, zIndex: 10, bgcolor: 'background.paper', pt: 1, pb: 1, borderBottom: '1px solid #ddd' }}>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', px: 1 }}>
-          <Typography variant="subtitle2" sx={{ fontWeight: 'bold' }}>
-            Total: {fmt(totalAmount)}
-          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+            <Typography variant="subtitle2" sx={{ fontWeight: 'bold' }}>
+              Total: {fmt(totalAmount)}
+            </Typography>
+            {scanEngine === 'gemini' && (
+              <Chip size="small" label="✨ AI Scan (Gemini)" sx={{ bgcolor: '#f3e5f5', color: '#7b1fa2', fontWeight: 700, height: 22, fontSize: 10 }} />
+            )}
+            {scanEngine === 'tesseract' && (
+              <Chip size="small" label="📄 Local OCR" sx={{ bgcolor: '#fff3e0', color: '#e65100', fontWeight: 600, height: 22, fontSize: 10 }} />
+            )}
+          </Box>
           {(counts['needs-fix'] > 0 || counts['verify'] > 0) && (
             <Button size="small" variant="outlined" color="error" onClick={jumpToNextIssue} endIcon={<ExpandMoreIcon />}>
               Jump to next issue
