@@ -948,6 +948,185 @@ app.post('/api/purchases/:id/reverse', requireAuth, requireOwner, async (req, re
   } catch (e) { next(e); }
 });
 
+
+// ==========================================
+// GEMINI AI SCANNER ENDPOINT (L2 Vision)
+// ==========================================
+app.post('/api/purchases/scan-invoice', requireAuth, requireFeature('scanner'), aiScannerLimiter, async (req, res, next) => {
+  try {
+    const { image_base64 } = req.body;
+    if (!image_base64) {
+      return res.status(400).json({ error: 'image_base64 is required' });
+    }
+    
+    const base64Data = image_base64.replace(/^data:image\/\w+;base64,/, '');
+    
+    // 2MB server-side guard
+    const bufferSize = Buffer.byteLength(base64Data, 'base64');
+    if (bufferSize > 2 * 1024 * 1024) {
+      return res.status(400).json({ error: 'Image exceeds 2MB limit.' });
+    }
+    
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      if (typeof Sentry !== 'undefined') {
+        Sentry.captureException(new Error('GEMINI_API_KEY missing in production environment'));
+      }
+      return res.status(500).json({ error: 'Server configuration error.' });
+    }
+
+    const prompt = `Ye ek Indian pharmaceutical wholesale distributor ki TAX INVOICE ki photo hai. Isse parse karke SIRF ye JSON return karo — koi explanation, koi markdown, koi extra text NahI:
+{
+  "supplier_name": string|null,
+  "invoice_number": string|null,
+  "invoice_date": string|null,
+  "items": [
+    {
+      "medicine_name": string,
+      "company": string|null,
+      "batch_number": string|null,
+      "expiry": string|null,
+      "quantity": number|null,
+      "free_quantity": number|null,
+      "rate": number|null
+    }
+  ]
+}
+
+RULES:
+Unreadable/unclear field → null (GUESS MAT KARO)
+quantity = strips/bottles PURCHASED (paid column only)
+free_quantity = bonus/free column, ALAG se
+rate = per-unit price, line total NahI
+expiry normalize karo: 08/2027 → 2027-08-31 (month-end), 08-2027 → 2027-08-31, Aug-2027 → 2027-08-31, 12/27 → 2027-12-31
+Agar items table me multiple pages/split rows hain, sab merge karo
+Ye handwritten ho sakta hai — handwriting dhyan se padho`;
+
+    const makeGeminiRequest = async () => {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000);
+      try {
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{
+              parts: [
+                { text: prompt },
+                {
+                  inline_data: {
+                    mime_type: 'image/jpeg',
+                    data: base64Data
+                  }
+                }
+              ]
+            }],
+            generationConfig: {
+              response_mime_type: 'application/json'
+            }
+          }),
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+        return response;
+      } catch (err) {
+        clearTimeout(timeoutId);
+        throw err;
+      }
+    };
+
+    const startTime = Date.now();
+    let geminiRes;
+    try {
+      geminiRes = await makeGeminiRequest();
+    } catch (e) {
+      if (e.name === 'AbortError' || e.type === 'aborted') {
+        return res.status(503).json({ error: 'AI service timeout — dobara try karo ya manual entry karo', engine: 'none' });
+      }
+      return res.status(503).json({ error: 'AI service unavailable.' });
+    }
+
+    if (geminiRes.status === 429) {
+      return res.status(503).json({ error: 'AI quota exceeded — thodi der me try karo' });
+    }
+    
+    if (!geminiRes.ok) {
+      return res.status(502).json({ error: 'Upstream AI error.' });
+    }
+
+    const resJson = await geminiRes.json();
+    let rawText = resJson.candidates?.[0]?.content?.parts?.[0]?.text;
+    
+    let parsedData = null;
+    try {
+      if (rawText) {
+        rawText = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
+        parsedData = JSON.parse(rawText);
+      }
+    } catch (e) {
+      // 1 retry for malformed JSON
+      try {
+        const retryRes = await makeGeminiRequest();
+        if (!retryRes.ok) {
+          return res.status(502).json({ error: 'Upstream AI error.' });
+        }
+        const retryResJson = await retryRes.json();
+        let retryRaw = retryResJson.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (retryRaw) {
+          retryRaw = retryRaw.replace(/```json/g, '').replace(/```/g, '').trim();
+          parsedData = JSON.parse(retryRaw);
+        }
+      } catch (retryErr) {
+        return res.status(502).json({ error: 'AI returned malformed data.' });
+      }
+    }
+    
+    if (!parsedData || !Array.isArray(parsedData.items)) {
+      return res.status(502).json({ error: 'AI returned malformed data.' });
+    }
+
+    // Validation after response bounds
+    parsedData.items = parsedData.items.map(item => {
+      let qty = item.quantity;
+      if (qty !== null && qty !== undefined) {
+        qty = Number(qty);
+        if (isNaN(qty) || qty < 0 || qty > 10000) qty = null;
+      } else {
+        qty = null;
+      }
+      
+      let rate = item.rate;
+      if (rate !== null && rate !== undefined) {
+        rate = Number(rate);
+        if (isNaN(rate) || rate < 0 || rate > 100000) rate = null;
+      } else {
+        rate = null;
+      }
+      
+      let expiry = item.expiry;
+      if (expiry) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(expiry)) expiry = null;
+      }
+
+      return { ...item, quantity: qty, rate, expiry };
+    });
+
+    const latency_ms = Date.now() - startTime;
+    console.log(`[Gemini Scanner] latency=${latency_ms}ms items=${parsedData.items.length} success=true`);
+
+    return res.json({
+      engine: 'gemini',
+      invoice_number: parsedData.invoice_number || '',
+      supplier_name: parsedData.supplier_name || '',
+      invoice_date: parsedData.invoice_date || '',
+      items: parsedData.items
+    });
+
+  } catch (err) {
+    next(err);
+  }
+});
+
 app.post('/api/purchases', requireAuth, async (req, res, next) => {
   try {
     const { supplier_name, invoice_number, items } = req.body || {};

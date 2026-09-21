@@ -1,3 +1,4 @@
+import MobileReviewList from '../components/MobileReviewList.jsx';
 import { useEffect, useState, useRef } from 'react';
 import {
   Box, Typography, Button, Paper, Snackbar, Alert, Dialog, DialogTitle,
@@ -549,80 +550,13 @@ export default function Purchases() {
           <Divider sx={{ my: 2.5 }} />
 
           {isMobile ? (
-            /* Mobile: each purchase line becomes a stacked card */
-            <Box>
-              {lines.map((l, i) => {
-                const med = medicines.find((m) => m.id === l.medicine_id);
-                return (
-                  <Paper key={i} sx={{ p: 2, mb: 2, bgcolor: '#fafbfb', border: (scannedNotice && !l.medicine_id) ? '1px solid #d32f2f' : '1px solid #e0e6e4' }}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', mb: 1.5 }}>
-                      <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>Item {i + 1}</Typography>
-                      <IconButton size="small" color="error" disabled={lines.length === 1}
-                        onClick={() => setLines(lines.filter((_, idx) => idx !== i))}>
-                        <DeleteIcon fontSize="small" />
-                      </IconButton>
-                    </Box>
-                    <Autocomplete
-                      size="small" options={medicines} value={med || null} fullWidth
-                      onChange={(e, v) => setLine(i, { medicine_id: v ? v.id : null, buy_price: v ? String(v.buy_price) : l.buy_price, candidates: [] })}
-                      getOptionLabel={(o) => `${o.name} — ${o.company}`}
-                      renderInput={(p) => (
-                        <TextField
-                          {...p}
-                          label="Select medicine *"
-                          error={scannedNotice && !l.medicine_id}
-                          helperText={scannedNotice && !l.medicine_id ? 'Please verify this field' : ''}
-                        />
-                      )}
-                      sx={{ mb: 1 }}
-                    />
-                    {scannedNotice && l.candidates && l.candidates.length > 0 && !l.medicine_id && (
-                      <Box sx={{ mb: 1.5, display: 'flex', flexWrap: 'wrap', gap: 0.5, alignItems: 'center' }}>
-                        <Typography variant="caption" sx={{ color: 'warning.dark', fontWeight: 600 }}>Top suggestions:</Typography>
-                        {l.candidates.map((c) => (
-                          <Chip
-                            key={c.id}
-                            size="small"
-                            variant="outlined"
-                            color="primary"
-                            label={`${c.name} (${c.company || 'Generic'})`}
-                            onClick={() => setLine(i, {
-                              medicine_id: c.id,
-                              buy_price: c.buy_price ? String(c.buy_price) : l.buy_price,
-                              candidates: [],
-                            })}
-                            sx={{ fontSize: 11, cursor: 'pointer' }}
-                          />
-                        ))}
-                      </Box>
-                    )}
-                    <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
-                      <TextField size="small" label="Batch # *" value={l.batch_number}
-                        error={scannedNotice && !l.batch_number.trim()}
-                        helperText={scannedNotice && !l.batch_number.trim() ? 'Please verify' : ''}
-                        onChange={(e) => setLine(i, { batch_number: e.target.value })} placeholder="e.g. AB1234" />
-                      <TextField size="small" label="Expiry *" type="date" value={l.expiry_date}
-                        error={scannedNotice && !/^\d{4}-\d{2}-\d{2}$/.test(l.expiry_date)}
-                        helperText={scannedNotice && !/^\d{4}-\d{2}-\d{2}$/.test(l.expiry_date) ? 'Please verify' : ''}
-                        InputLabelProps={{ shrink: true }}
-                        onChange={(e) => setLine(i, { expiry_date: e.target.value })} />
-                      <TextField size="small" label="Qty *" type="number" value={l.quantity}
-                        error={scannedNotice && !(Number(l.quantity) > 0)}
-                        helperText={scannedNotice && !(Number(l.quantity) > 0) ? 'Please verify' : ''}
-                        inputProps={{ min: 1 }} onChange={(e) => setLine(i, { quantity: e.target.value })} />
-                      <TextField size="small" label="Buy Price (₹) *" type="number" value={l.buy_price}
-                        error={scannedNotice && !(Number(l.buy_price) >= 0 && l.buy_price !== '')}
-                        helperText={scannedNotice && !(Number(l.buy_price) >= 0 && l.buy_price !== '') ? 'Please verify' : ''}
-                        inputProps={{ min: 0, step: '0.01' }} onChange={(e) => setLine(i, { buy_price: e.target.value })} />
-                    </Box>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 1.5 }}>
-                      <Typography variant="body2" color="text.secondary">Line total</Typography>
-                      <Typography sx={{ fontWeight: 700 }}>{fmt(lineTotal(l))}</Typography>
-                    </Box>
-                  </Paper>
-                );
-              })}
-            </Box>
+            <MobileReviewList 
+               lines={lines} 
+               setLines={setLines} 
+               setLine={setLine} 
+               medicines={medicines} 
+               scannedNotice={scannedNotice} 
+            />
           ) : (
             <TableContainer>
               <Table size="small">
@@ -745,12 +679,33 @@ export default function Purchases() {
             Entering the same batch number again? It will simply <b>add to the existing batch quantity</b>. New batch numbers create a new stock batch with its own expiry.
           </Alert>
         </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 2, flexWrap: 'wrap', gap: 1 }}>
+        <DialogActions sx={{ position: 'sticky', bottom: 0, bgcolor: 'background.paper', zIndex: 10, borderTop: '1px solid #ddd', px: 3, pb: 2, flexWrap: 'wrap', gap: 1 }}>
           <Typography sx={{ flexGrow: 1, fontWeight: 800, fontSize: 18 }}>Total: {fmt(grandTotal)}</Typography>
           <Button onClick={() => setOpen(false)}>Cancel</Button>
-          <Button variant="contained" startIcon={<SaveIcon />} onClick={save} disabled={busy || !canSave}>
-            {busy ? 'Saving…' : 'Save & Update Stock'}
+          
+          <Button 
+             variant="contained" 
+             startIcon={<SaveIcon />} 
+             onClick={save} 
+             disabled={busy || !canSave || (scannedNotice && countValid(lines) !== lines.length)}
+             color={countValid(lines) === lines.length && lines.length > 0 ? 'success' : 'primary'}
+             sx={{
+                  ...(scannedNotice && isMobile && countValid(lines) === lines.length && lines.length > 0 
+                      ? { animation: 'pulse 1.5s infinite' } : {})
+             }}
+          >
+            {busy ? 'Saving…' : (scannedNotice && isMobile ? `SAVE & UPDATE STOCK (${countValid(lines)}/${lines.length} verified)` : 'Save & Update Stock')}
           </Button>
+          <style>
+            {`
+              @keyframes pulse {
+                0% { transform: scale(1); }
+                50% { transform: scale(1.02); }
+                100% { transform: scale(1); }
+              }
+            `}
+          </style>
+        
         </DialogActions>
       </Dialog>
 

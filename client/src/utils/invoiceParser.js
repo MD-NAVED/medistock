@@ -5,7 +5,20 @@ import { createWorker } from 'tesseract.js';
  */
 function normalizeDate(rawDate) {
   if (!rawDate) return '';
-  const clean = rawDate.trim().replace(/[^\d\/\.-]/g, '');
+  const rawTrimmed = rawDate.trim();
+  
+  // Check for MMM-YYYY or MMM YYYY (e.g. Aug-2027, Aug 2027, Aug/2027)
+  const mmmMatch = rawTrimmed.match(/^([A-Za-z]{3})[\s\/\.-]+(\d{2,4})$/);
+  if (mmmMatch) {
+    const months = { jan:'01', feb:'02', mar:'03', apr:'04', may:'05', jun:'06', jul:'07', aug:'08', sep:'09', oct:'10', nov:'11', dec:'12' };
+    const mStr = mmmMatch[1].toLowerCase();
+    const mm = months[mStr] || '01';
+    let yy = mmmMatch[2];
+    if (yy.length === 2) yy = '20' + yy;
+    return `${yy}-${mm}-28`;
+  }
+
+  const clean = rawTrimmed.replace(/[^\d\/\.-]/g, '');
 
   // Full date: DD/MM/YYYY or YYYY-MM-DD
   const fullMatch = clean.match(/^(\d{1,2})[\/\.-](\d{1,2})[\/\.-](\d{2,4})$/);
@@ -206,14 +219,18 @@ export function parseInvoiceText(rawText, medicinesList = []) {
   }
 
   // 3. Extract Supplier Name from header lines
-  const headerCandidates = lines.slice(0, 8).filter((l) => {
+  const headerCandidates = lines.slice(0, 10).filter((l) => {
     const lower = l.toLowerCase();
+    const isWatermark = lower.includes('.ai') || lower.includes('generated') || lower.includes('http');
+    const isDate = /^\d{1,2}[\/\.-]\d{1,2}[\/\.-]\d{2,4}$/.test(l.replace(/[^\d\/\.-]/g, ''));
     return !lower.includes('invoice') && !lower.includes('tax') && !lower.includes('gstin')
       && !lower.includes('original') && !lower.includes('bill') && !lower.includes('phone')
-      && !lower.includes('date') && l.length >= 3;
+      && !lower.includes('date') && l.length >= 3 && !isWatermark && !isDate;
   });
   if (headerCandidates.length > 0) {
-    supplier_name = headerCandidates[0].replace(/^[^A-Za-z0-9]+/, '');
+    // Prefer lines with typical distributor keywords
+    const pharmaLine = headerCandidates.find(l => /pharma|medical|distributor|agency|medicos/i.test(l));
+    supplier_name = (pharmaLine || headerCandidates[0]).replace(/^[^A-Za-z0-9]+/, '');
   }
 
   // 4. Line Items Extraction
@@ -257,6 +274,25 @@ export function parseInvoiceText(rawText, medicinesList = []) {
         buyPrice = String(topMatch.medicine.buy_price);
       }
 
+      // Catalog-Anchored Sanity Check
+      if (isConfident && topMatch?.medicine?.buy_price) {
+        const catPrice = Number(topMatch.medicine.buy_price);
+        const pQty = Number(quantity);
+        const pPrice = Number(buyPrice);
+        
+        if (pPrice && pQty && catPrice > 0) {
+          // If parsed price / parsed_qty is close to catalog buy_price, then pPrice was AMOUNT (total) instead of RATE
+          if (Math.abs((pPrice / pQty) - catPrice) / catPrice < 0.4) {
+             buyPrice = String(Number((pPrice / pQty).toFixed(2)));
+          }
+        }
+        
+        // If parsed qty > 500 and the medicine name contains that dosage number (e.g. "CROCIN 650" -> 650)
+        if (pQty > 500 && topMatch.name.includes(String(pQty))) {
+           quantity = ''; // Blank it, it picked dosage as qty
+        }
+      }
+
       // NO SILENT DEFAULTS:
       // If confident, assign medicine_id. If not confident, leave empty '' and supply candidates.
       // batch_number, expiry_date, quantity, buy_price are left empty if unextracted.
@@ -291,6 +327,63 @@ export function parseInvoiceText(rawText, medicinesList = []) {
  * Runs Tesseract OCR on an image file/blob and parses structure.
  * Compresses to 1280px first to avoid mobile WebAssembly memory issues.
  */
+
+/**
+ * Sends image to the new Gemini Vision server endpoint.
+ */
+export async function parseInvoiceViaServer(base64Image, medicinesList) {
+  const token = localStorage.getItem('token');
+  const res = await fetch('/api/purchases/scan-invoice', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    },
+    body: JSON.stringify({ image_base64: base64Image })
+  });
+  if (!res.ok) {
+    let errText = 'Server error';
+    try {
+      const j = await res.json();
+      if (j.error) errText = j.error;
+    } catch(e){}
+    throw new Error(errText);
+  }
+  const data = await res.json();
+  
+  // Transform Gemini output to match existing Tesseract output shape
+  const transformedItems = (data.items || []).map(item => {
+     const matchResult = scoreMedicineMatches((item.medicine_name || '') + ' ' + (item.company || ''), medicinesList);
+     const { topMatch, candidates, isConfident } = matchResult;
+     
+     return {
+        medicine_id: isConfident ? topMatch.id : '',
+        matchedName: isConfident ? `${topMatch.name} (${topMatch.company})` : '',
+        candidates: candidates.map((c) => ({
+          id: c.id,
+          name: c.name,
+          company: c.company,
+          buy_price: c.buy_price,
+        })),
+        lowConfidence: !isConfident && candidates.length > 0,
+        batch_number: (item.batch_number || '').toUpperCase(),
+        expiry_date: item.expiry || '',
+        quantity: item.quantity !== null && item.quantity !== undefined ? String(item.quantity) : '',
+        free_quantity: item.free_quantity !== null && item.free_quantity !== undefined ? String(item.free_quantity) : '',
+        buy_price: item.rate !== null && item.rate !== undefined ? String(item.rate) : '',
+        rawLine: `${item.medicine_name} ${item.batch_number||''} ${item.expiry||''} ${item.quantity||''} ${item.rate||''}`
+     };
+  });
+  
+  return {
+    engine: data.engine || 'gemini',
+    supplier_name: data.supplier_name || '',
+    invoice_number: data.invoice_number || '',
+    date: data.invoice_date || '',
+    items: transformedItems
+  };
+}
+
 export async function parseInvoiceImage(imageFile, medicinesList = [], onProgress = () => {}) {
   let worker = null;
   try {
@@ -331,5 +424,24 @@ export async function parseInvoiceFile(file, medicinesList = [], onProgress = ()
     return parseInvoicePDF(file, medicinesList, onProgress);
   }
 
-  return parseInvoiceImage(file, medicinesList, onProgress);
+  // Regular Image Fallback Logic
+  onProgress('Compressing invoice image for mobile…', 10);
+  const compressedBlob = await compressImage(file, 1280, 0.8);
+  
+  try {
+    onProgress('✨ AI Scan (Gemini) - Processing...', 50);
+    // Convert blob to base64
+    const base64 = await new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.readAsDataURL(compressedBlob);
+    });
+    const parsed = await parseInvoiceViaServer(base64, medicinesList);
+    onProgress('Complete!', 100);
+    return parsed;
+  } catch (err) {
+    console.warn('Gemini failed, falling back to local OCR:', err);
+    onProgress('📄 Local OCR (fallback) - Initializing...', 60);
+    return parseInvoiceImage(compressedBlob, medicinesList, onProgress);
+  }
 }

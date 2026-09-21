@@ -1,6 +1,6 @@
 import * as pdfjsLib from 'pdfjs-dist';
 import { createWorker } from 'tesseract.js';
-import { parseInvoiceText } from './invoiceParser.js';
+import { parseInvoiceText, parseInvoiceViaServer } from './invoiceParser.js';
 
 export const PINNED_PDFJS_VERSION = '4.10.38';
 
@@ -125,7 +125,7 @@ export async function parseInvoicePDF(
 
   try {
     onProgress('Initializing OCR engine…', 20, { page: 0, totalPages: pdf.numPages, thumbnails });
-    worker = await createWorker('eng');
+    // worker initialized on demand
 
     for (let i = 1; i <= pdf.numPages; i++) {
       const convertPct = Math.round(20 + ((i - 0.7) / pdf.numPages) * 70);
@@ -153,16 +153,28 @@ export async function parseInvoicePDF(
 
         await page.render({ canvasContext: ctx, viewport }).promise;
 
+
         const scanPct = Math.round(20 + ((i - 0.2) / pdf.numPages) * 70);
-        onProgress(`Scanning page ${i} of ${pdf.numPages}…`, scanPct, {
+        onProgress(`✨ AI Scan (Gemini) page ${i} of ${pdf.numPages}…`, scanPct, {
           page: i,
           totalPages: pdf.numPages,
           stage: 'scanning',
           thumbnails,
         });
 
-        const { data } = await worker.recognize(canvas);
-        pageText = data?.text || '';
+        const base64 = canvas.toDataURL('image/jpeg', 0.8);
+        try {
+          const pageParsed = await parseInvoiceViaServer(base64, medicinesList);
+          pageTexts.push(pageParsed); // store the parsed result
+        } catch (geminiErr) {
+          console.warn('Gemini failed for PDF page, falling back to Tesseract...', geminiErr);
+          onProgress(`📄 Local OCR (fallback) page ${i} of ${pdf.numPages}…`, scanPct, {
+             page: i, totalPages: pdf.numPages, stage: 'scanning', thumbnails
+          });
+          if (!worker) worker = await createWorker('eng');
+          const { data } = await worker.recognize(canvas);
+          pageTexts.push(data?.text || '');
+        }
 
         // Immediate disposal of page & canvas to free memory on budget phones
         canvas.width = 0;
@@ -170,7 +182,6 @@ export async function parseInvoicePDF(
       }
 
       if (page.cleanup) page.cleanup();
-      pageTexts.push(pageText);
     }
 
     onProgress('Extracting supplier, batches & line items…', 95, {
@@ -180,11 +191,36 @@ export async function parseInvoicePDF(
       thumbnails,
     });
 
-    const combinedText = pageTexts.join('\n--- PAGE BREAK ---\n');
-    const parsed = parseInvoiceText(combinedText, medicinesList);
+    // Merge logic
+    let finalParsed = { supplier_name: '', invoice_number: '', date: '', items: [] };
+    let hasGemini = false;
+    let combinedText = '';
+
+    for (const res of pageTexts) {
+       if (typeof res === 'string') {
+          combinedText += res + '\n--- PAGE BREAK ---\n';
+       } else {
+          hasGemini = true;
+          if (!finalParsed.supplier_name && res.supplier_name) finalParsed.supplier_name = res.supplier_name;
+          if (!finalParsed.invoice_number && res.invoice_number) finalParsed.invoice_number = res.invoice_number;
+          if (!finalParsed.date && res.date) finalParsed.date = res.date;
+          if (res.items) finalParsed.items.push(...res.items);
+       }
+    }
+    
+    if (combinedText.trim()) {
+       const textParsed = parseInvoiceText(combinedText, medicinesList);
+       if (!finalParsed.supplier_name && textParsed.supplier_name) finalParsed.supplier_name = textParsed.supplier_name;
+       if (!finalParsed.invoice_number && textParsed.invoice_number) finalParsed.invoice_number = textParsed.invoice_number;
+       if (!finalParsed.date && textParsed.date) finalParsed.date = textParsed.date;
+       finalParsed.items.push(...textParsed.items);
+    }
+    
+    if (hasGemini) finalParsed.engine = 'gemini';
 
     onProgress('Complete!', 100, { page: pdf.numPages, totalPages: pdf.numPages, stage: 'done', thumbnails });
-    return parsed;
+    return finalParsed;
+
   } finally {
     if (worker) {
       try {
