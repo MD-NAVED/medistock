@@ -1002,13 +1002,23 @@ expiry normalize karo: 08/2027 → 2027-08-31 (month-end), 08-2027 → 2027-08-3
 Agar items table me multiple pages/split rows hain, sab merge karo
 Ye handwritten ho sakta hai — handwriting dhyan se padho`;
 
+    // Support both classic ('AIzaSy') and new v2 ('AQ.') API key formats
+    const isClassicKey = apiKey.startsWith('AIzaSy');
+    const geminiUrl = isClassicKey
+      ? `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`
+      : `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent`;
+    const geminiHeaders = {
+      'Content-Type': 'application/json',
+      ...(!isClassicKey ? { 'x-goog-api-key': apiKey } : {})
+    };
+
     const makeGeminiRequest = async () => {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 30000);
       try {
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
+        const response = await fetch(geminiUrl, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: geminiHeaders,
           body: JSON.stringify({
             contents: [{
               parts: [
@@ -1040,6 +1050,10 @@ Ye handwritten ho sakta hai — handwriting dhyan se padho`;
     try {
       geminiRes = await makeGeminiRequest();
     } catch (e) {
+      console.error('[Gemini] API call failed:', e.name || 'Error', e.message || e);
+      if (typeof Sentry !== 'undefined') {
+        Sentry.captureException(e);
+      }
       if (e.name === 'AbortError' || e.type === 'aborted') {
         return res.status(503).json({ error: 'AI service timeout — dobara try karo ya manual entry karo', engine: 'none' });
       }
@@ -1047,10 +1061,20 @@ Ye handwritten ho sakta hai — handwriting dhyan se padho`;
     }
 
     if (geminiRes.status === 429) {
+      console.warn('[Gemini] Rate limit hit (429)');
       return res.status(503).json({ error: 'AI quota exceeded — thodi der me try karo' });
     }
     
     if (!geminiRes.ok) {
+      const status = geminiRes.status;
+      const errorText = await geminiRes.text().catch(() => 'Unknown upstream error');
+      console.error('[Gemini] API call failed:', status, errorText);
+      if (status === 404) {
+        console.error('[Gemini] Model gemini-2.0-flash not found or not available for this key. Check available models.');
+      }
+      if (typeof Sentry !== 'undefined' && status >= 500) {
+        Sentry.captureMessage(`[Gemini] API upstream error ${status}: ${errorText}`);
+      }
       return res.status(502).json({ error: 'Upstream AI error.' });
     }
 
@@ -1068,6 +1092,9 @@ Ye handwritten ho sakta hai — handwriting dhyan se padho`;
       try {
         const retryRes = await makeGeminiRequest();
         if (!retryRes.ok) {
+          const retryStatus = retryRes.status;
+          const retryErrText = await retryRes.text().catch(() => 'Unknown error text');
+          console.error('[Gemini] Retry API call failed:', retryStatus, retryErrText);
           return res.status(502).json({ error: 'Upstream AI error.' });
         }
         const retryResJson = await retryRes.json();
