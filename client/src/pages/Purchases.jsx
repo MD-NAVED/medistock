@@ -1,5 +1,5 @@
 import MobileReviewList from '../components/MobileReviewList.jsx';
-import { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
   Box, Typography, Button, Paper, Snackbar, Alert, Dialog, DialogTitle,
   DialogContent, DialogActions, TextField, MenuItem, Autocomplete, IconButton,
@@ -59,18 +59,18 @@ function PurchaseCard({ row, isOwner, onOpen }) {
   );
 }
 
-export default function Purchases() {
+export default function Purchases({ initialLines, initialOpen, initialScannedNotice, disablePortal } = {}) {
   const { user } = useAuth();
-  const isOwner = user.role === 'owner';
+  const isOwner = user?.role === 'owner';
   const isMobile = useMediaQuery('(max-width:900px)');
   const [rows, setRows] = useState([]);
   const [range, setRange] = useState({ from: '', to: '' });
   const [medicines, setMedicines] = useState([]);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(initialOpen !== undefined ? initialOpen : false);
   const [busy, setBusy] = useState(false);
   const [snack, setSnack] = useState(null);
   const [head, setHead] = useState({ supplier_name: '', invoice_number: '', date: todayStr() });
-  const [lines, setLines] = useState([{ ...EMPTY_LINE }]);
+  const [lines, setLines] = useState(initialLines !== undefined ? initialLines : [{ ...EMPTY_LINE }]);
   const [detailId, setDetailId] = useState(null);       // purchase being viewed
   const [detail, setDetail] = useState(null);           // loaded detail payload
   const [reverseMode, setReverseMode] = useState(false);
@@ -86,7 +86,7 @@ export default function Purchases() {
   const [scanBusy, setScanBusy] = useState(false);
   const [scanProgress, setScanProgress] = useState(0);
   const [scanStatus, setScanStatus] = useState('');
-  const [scannedNotice, setScannedNotice] = useState(false);
+  const [scannedNotice, setScannedNotice] = useState(initialScannedNotice !== undefined ? initialScannedNotice : false);
   const [infoOpen, setInfoOpen] = useState(false);
   const [dupeDialog, setDupeDialog] = useState(null);
   const cameraInputRef = useRef(null);
@@ -205,9 +205,18 @@ export default function Purchases() {
 
   const lineTotal = (l) => (Number(l.quantity) || 0) * (Number(l.buy_price) || 0);
   const grandTotal = lines.reduce((s, l) => s + lineTotal(l), 0);
-  const canSave = lines.every((l) =>
-    l.medicine_id && l.batch_number.trim() && /^\d{4}-\d{2}-\d{2}$/.test(l.expiry_date) && Number(l.quantity) > 0 && Number(l.buy_price) >= 0
+  const isLineValid = (l) => Boolean(
+    l &&
+    l.medicine_id &&
+    l.batch_number &&
+    l.batch_number.trim() &&
+    /^\d{4}-\d{2}-\d{2}$/.test(l.expiry_date) &&
+    Number(l.quantity) > 0 &&
+    Number(l.buy_price) >= 0 &&
+    l.buy_price !== ''
   );
+  const countValid = (items = lines) => (items || []).filter(isLineValid).length;
+  const canSave = lines.length > 0 && lines.every(isLineValid);
 
   const save = async () => {
     setBusy(true);
@@ -534,7 +543,7 @@ export default function Purchases() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={open} onClose={() => setOpen(false)} maxWidth="md" fullWidth fullScreen={isMobile}>
+      <Dialog open={open} onClose={() => setOpen(false)} maxWidth="md" fullWidth fullScreen={isMobile} disablePortal={disablePortal}>
         <DialogTitle>New Purchase — add stock by batch</DialogTitle>
         <DialogContent sx={{ pt: '8px !important' }}>
           {scannedNotice && (
@@ -690,11 +699,11 @@ export default function Purchases() {
              disabled={busy || !canSave || (scannedNotice && countValid(lines) !== lines.length)}
              color={countValid(lines) === lines.length && lines.length > 0 ? 'success' : 'primary'}
              sx={{
-                  ...(scannedNotice && isMobile && countValid(lines) === lines.length && lines.length > 0 
+                  ...(scannedNotice && countValid(lines) === lines.length && lines.length > 0 
                       ? { animation: 'pulse 1.5s infinite' } : {})
              }}
           >
-            {busy ? 'Saving…' : (scannedNotice && isMobile ? `SAVE & UPDATE STOCK (${countValid(lines)}/${lines.length} verified)` : 'Save & Update Stock')}
+            {busy ? 'Saving…' : (scannedNotice ? `SAVE & UPDATE STOCK (${countValid(lines)}/${lines.length} verified)` : 'Save & Update Stock')}
           </Button>
           <style>
             {`
