@@ -1,0 +1,54 @@
+{
+  "entity": "event",
+  "account_id": "acc_PHwV5X48kEflW6",
+  "event": "payment.captured",
+  "contains": [
+    "payment"
+  ],
+  "payload": {
+    "payment": {
+      "entity": {
+        "id": "pay_TbA3RvqKiPcqt3",
+        "entity": "payment",
+        "amount": 29900,
+        "currency": "INR",
+        "status": "captured",
+        "order_id": "order_TbA1ojSUMYM4WY",
+        "invoice_id": null,
+        "international": false,
+        "method": "upi",
+        "amount_refunded": 0,
+        "refund_status": null,
+        "captured": true,
+        "description": "#TbA05O6Dj228ys",
+        "card_id": null,
+        "bank": null,
+        "wallet": null,
+        "vpa": "andyk4548-1@oksbi",
+        "email": null,
+        "contact": "+919753880839",
+        "notes": {
+          "plan": "starter-monthly",
+          "tenant_id": "11"
+        },
+        "fee": 0,
+        "tax": 0,
+        "error_code": null,
+        "error_description": null,
+        "error_source": null,
+        "error_step": null,
+        "error_reason": null,
+        "acquirer_data": {
+          "rrn": "625544238808"
+        },
+        "created_at": 1789223906,
+        "upi": {
+          "payer_account_type": "bank_account",
+          "vpa": "andyk4548-1@oksbi",
+          "flow": "intent"
+        }
+      }
+    }
+  },
+  "created_at": 1789223906
+}

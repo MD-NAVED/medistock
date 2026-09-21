@@ -1005,8 +1005,8 @@ Ye handwritten ho sakta hai — handwriting dhyan se padho`;
     // Support both classic ('AIzaSy') and new v2 ('AQ.') API key formats
     const isClassicKey = apiKey.startsWith('AIzaSy');
     const geminiUrl = isClassicKey
-      ? `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`
-      : `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent`;
+      ? `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${apiKey}`
+      : `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent`;
     const geminiHeaders = {
       'Content-Type': 'application/json',
       ...(!isClassicKey ? { 'x-goog-api-key': apiKey } : {})
@@ -1070,7 +1070,7 @@ Ye handwritten ho sakta hai — handwriting dhyan se padho`;
       const errorText = await geminiRes.text().catch(() => 'Unknown upstream error');
       console.error('[Gemini] API call failed:', status, errorText);
       if (status === 404) {
-        console.error('[Gemini] Model gemini-2.0-flash not found or not available for this key. Check available models.');
+        console.error('[Gemini] Model gemini-3.6-flash not found or not available for this key. Check available models.');
       }
       if (typeof Sentry !== 'undefined' && status >= 500) {
         Sentry.captureMessage(`[Gemini] API upstream error ${status}: ${errorText}`);

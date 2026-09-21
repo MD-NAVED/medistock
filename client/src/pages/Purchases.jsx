@@ -144,7 +144,7 @@ export default function Purchases({ initialLines, initialOpen, initialScannedNot
       }
 
       setScannedNotice(true);
-      setScanEngine(parsed.engine || 'gemini');
+      setScanEngine(parsed.engine || 'tesseract');
       setOpen(true);
       setSnack({ severity: 'success', message: 'Invoice scanned! Pre-filled purchase details below for review.' });
     } catch (err) {
@@ -571,7 +571,7 @@ export default function Purchases({ initialLines, initialOpen, initialScannedNot
 
           <Divider sx={{ my: 2.5 }} />
 
-          {isMobile ? (
+          {(isMobile || scannedNotice) ? (
             <MobileReviewList 
                lines={lines} 
                setLines={setLines} 
