@@ -45,6 +45,8 @@ export async function api(path, { method = 'GET', body } = {}) {
     err.status = res.status;
     err.code = data && data.code;
     err.existing_purchase_id = data && data.existing_purchase_id;
+    err.existing_medicine_id = data && data.existing_medicine_id;
+    err.data = data;
     throw err;
   }
   // A 2xx with an unparseable body (e.g. an HTML fallback page) must never

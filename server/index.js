@@ -769,9 +769,13 @@ app.post('/api/medicines', requireAuth, requireOwner, async (req, res, next) => 
 
     // A removed medicine keeps its row (sales history references it), so adding
     // the same name + company again revives that row instead of failing.
-    const existing = (await pool.query('SELECT * FROM medicines WHERE name = $1 AND company = $2 AND store_id = $3', [nm, co, req.storeId])).rows[0];
+    const existing = (await pool.query('SELECT * FROM medicines WHERE LOWER(name) = LOWER($1) AND LOWER(company) = LOWER($2) AND (store_id = $3 OR store_id IS NULL)', [nm, co, req.storeId])).rows[0];
     if (existing && existing.active === 1) {
-      return bad(res, 409, 'This medicine + company already exists in the catalog');
+      return res.status(409).json({
+        error: 'Ye medicine+company already exist karta hai — usi me stock add kar do ya naam verify karo',
+        code: 'MEDICINE_EXISTS',
+        existing_medicine_id: existing.id
+      });
     }
     if (existing) {
       await pool.query(
@@ -788,14 +792,35 @@ app.post('/api/medicines', requireAuth, requireOwner, async (req, res, next) => 
        Number(buy_price) || 0, Number(sell_price) || 0, Number(gst_rate) || 0, Number(low_stock_threshold) || 10, logo, req.storeId]
     );
     res.json({ id: r.rows[0].id });
-  } catch (e) { next(e); }
+  } catch (e) {
+    if (e.code === '23505' || String(e.message).includes('unique_medicine_company') || String(e.message).includes('duplicate key') || e.constraint === 'unique_medicine_company' || e.constraint === 'unique_medicine_company_store') {
+      const nm = String(req.body?.name || '').trim();
+      const co = String(req.body?.company || '').trim();
+      let existingId = null;
+      try {
+        const found = (await pool.query(
+          'SELECT id FROM medicines WHERE LOWER(name) = LOWER($1) AND LOWER(company) = LOWER($2) AND (store_id = $3 OR store_id IS NULL) LIMIT 1',
+          [nm, co, req.storeId]
+        )).rows[0];
+        existingId = found?.id || null;
+      } catch {}
+      return res.status(409).json({
+        error: 'Ye medicine+company already exist karta hai — usi me stock add kar do ya naam verify karo',
+        code: 'MEDICINE_EXISTS',
+        existing_medicine_id: existingId
+      });
+    }
+    next(e);
+  }
 });
 
 app.put('/api/medicines/:id', requireAuth, requireOwner, async (req, res, next) => {
+  let m;
   try {
-    const m = (await pool.query('SELECT * FROM medicines WHERE id = $1 AND store_id = $2', [asId(req.params.id), req.storeId])).rows[0];
+    m = (await pool.query('SELECT * FROM medicines WHERE id = $1 AND store_id = $2', [asId(req.params.id), req.storeId])).rows[0];
     if (!m) return bad(res, 404, 'Medicine not found');
     const b = req.body || {};
+    const newName = String(b.name ?? m.name).trim();
     const newCompany = String(b.company ?? m.company).trim();
     const companyChanged = newCompany.toLowerCase() !== String(m.company || '').toLowerCase();
     let logo;
@@ -808,17 +833,50 @@ app.put('/api/medicines/:id', requireAuth, requireOwner, async (req, res, next) 
     } else {
       logo = m.logo_url;
     }
+
+    // Check collision on rename
+    const existing = (await pool.query(
+      'SELECT id FROM medicines WHERE LOWER(name) = LOWER($1) AND LOWER(company) = LOWER($2) AND (store_id = $3 OR store_id IS NULL) AND id != $4 LIMIT 1',
+      [newName, newCompany, req.storeId, m.id]
+    )).rows[0];
+    if (existing) {
+      return res.status(409).json({
+        error: 'Ye medicine+company already exist karta hai — usi me stock add kar do ya naam verify karo',
+        code: 'MEDICINE_EXISTS',
+        existing_medicine_id: existing.id
+      });
+    }
+
     await pool.query(
       'UPDATE medicines SET name=$1, company=$2, type=$3, shelf=$4, buy_price=$5, sell_price=$6, gst_rate=$7, low_stock_threshold=$8, logo_url=$9 WHERE id=$10',
       [
-        String(b.name ?? m.name).trim(), newCompany, String(b.type ?? m.type),
+        newName, newCompany, String(b.type ?? m.type),
         String(b.shelf ?? m.shelf).trim(), Number(b.buy_price ?? m.buy_price) || 0,
         Number(b.sell_price ?? m.sell_price) || 0, Number(b.gst_rate ?? m.gst_rate) || 0,
         Number(b.low_stock_threshold ?? m.low_stock_threshold) || 0, logo, m.id
       ]
     );
     res.json({ ok: true });
-  } catch (e) { next(e); }
+  } catch (e) {
+    if (e.code === '23505' || String(e.message).includes('unique_medicine_company') || String(e.message).includes('duplicate key') || e.constraint === 'unique_medicine_company' || e.constraint === 'unique_medicine_company_store') {
+      const nm = String((req.body?.name ?? m?.name) || '').trim();
+      const co = String((req.body?.company ?? m?.company) || '').trim();
+      let existingId = null;
+      try {
+        const found = (await pool.query(
+          'SELECT id FROM medicines WHERE LOWER(name) = LOWER($1) AND LOWER(company) = LOWER($2) AND (store_id = $3 OR store_id IS NULL) AND id != $4 LIMIT 1',
+          [nm, co, req.storeId, m?.id || 0]
+        )).rows[0];
+        existingId = found?.id || null;
+      } catch {}
+      return res.status(409).json({
+        error: 'Ye medicine+company already exist karta hai — usi me stock add kar do ya naam verify karo',
+        code: 'MEDICINE_EXISTS',
+        existing_medicine_id: existingId
+      });
+    }
+    next(e);
+  }
 });
 
 // ---------------------------------------------------------------------------

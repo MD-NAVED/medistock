@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Box, Typography, TextField, Button, Chip, Snackbar, Alert, Dialog,
   DialogTitle, DialogContent, DialogActions, MenuItem, IconButton, InputAdornment,
@@ -84,6 +85,7 @@ function MedicineCard({ row, isOwner, onEdit, onBatches, onDelete }) {
 }
 
 export default function Medicines() {
+  const navigate = useNavigate();
   const { user } = useAuth();
   const isOwner = user.role === 'owner';
   const isMobile = useMediaQuery('(max-width:900px)');
@@ -98,6 +100,7 @@ export default function Medicines() {
   const [deleteTarget, setDeleteTarget] = useState(null); // medicine pending removal
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState('');
+  const [duplicateDialog, setDuplicateDialog] = useState(null); // { existingMedicineId, name, company, buyPrice }
 
   const load = useCallback(async (query) => {
     setLoading(true);
@@ -126,6 +129,19 @@ export default function Medicines() {
     setDialogOpen(true);
   };
 
+  const handleGoToStockIn = (target) => {
+    const medId = target?.existingMedicineId;
+    setDuplicateDialog(null);
+    setDialogOpen(false);
+    navigate('/purchases', {
+      state: {
+        open: true,
+        prefillMedicineId: medId,
+        buyPrice: target?.buyPrice || '',
+      }
+    });
+  };
+
   const save = async () => {
     try {
       if (editing) {
@@ -143,6 +159,22 @@ export default function Medicines() {
       setDialogOpen(false);
       load(q);
     } catch (e) {
+      if (e.status === 409 && (e.code === 'MEDICINE_EXISTS' || e.message?.includes('already exist'))) {
+        const targetName = form.name.trim();
+        const targetCompany = form.company.trim();
+        const existingMed = rows.find(
+          (m) => m.name.toLowerCase() === targetName.toLowerCase() &&
+                 m.company.toLowerCase() === targetCompany.toLowerCase()
+        );
+        const existingId = e.existing_medicine_id || existingMed?.id || null;
+        setDuplicateDialog({
+          existingMedicineId: existingId,
+          name: targetName,
+          company: targetCompany,
+          buyPrice: form.buy_price || existingMed?.buy_price || '',
+        });
+        return;
+      }
       setSnack({ severity: 'error', message: e.message });
     }
   };
@@ -332,6 +364,40 @@ export default function Medicines() {
                   {deleteBusy ? 'Removing…' : 'Remove'}
                 </Button>
               )}
+            </DialogActions>
+          </>
+        )}
+      </Dialog>
+
+      {/* Friendly Duplicate Medicine Dialog */}
+      <Dialog open={!!duplicateDialog} onClose={() => setDuplicateDialog(null)} maxWidth="xs" fullWidth>
+        {duplicateDialog && (
+          <>
+            <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <InventoryIcon color="warning" />
+              Medicine Pehle Se Maujood Hai
+            </DialogTitle>
+            <DialogContent>
+              <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 0.5 }}>
+                {duplicateDialog.name} ({duplicateDialog.company})
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                Ye medicine pehle se hai — existing me stock add karna hai?
+              </Typography>
+              <Alert severity="info">
+                Aapko naya record banane ki zaroorat nahi hai. Existing medicine me naya batch/stock seedha add ho jayega.
+              </Alert>
+            </DialogContent>
+            <DialogActions sx={{ px: 3, pb: 2 }}>
+              <Button onClick={() => setDuplicateDialog(null)}>Cancel</Button>
+              <Button
+                variant="contained"
+                color="primary"
+                startIcon={<AddIcon />}
+                onClick={() => handleGoToStockIn(duplicateDialog)}
+              >
+                Existing Me Stock Add Karein
+              </Button>
             </DialogActions>
           </>
         )}

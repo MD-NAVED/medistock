@@ -242,6 +242,36 @@ async function pickStockedMedicine(token, minStock, exclude = []) {
   const delAsStaff = await call('/api/medicines/2', { method: 'DELETE', token: staff });
   check('staff cannot delete a medicine', delAsStaff.status === 403);
 
+  // ---- Duplicate medicine check (POST & PUT collision) ------------------
+  const dupeMedA = await call('/api/medicines', {
+    method: 'POST', token: owner,
+    body: { name: 'Dupe Check Medicine', company: 'DupeCo', type: 'Tablet', shelf: 'D1', buy_price: 10, sell_price: 15, gst_rate: 12, low_stock_threshold: 5 },
+  });
+  check('first medicine created for duplicate test', dupeMedA.status === 200 && dupeMedA.data.id > 0);
+  const dupeMedAId = dupeMedA.data.id;
+
+  const dupePost = await call('/api/medicines', {
+    method: 'POST', token: owner,
+    body: { name: 'Dupe Check Medicine', company: 'DupeCo', type: 'Capsule', shelf: 'D2', buy_price: 12, sell_price: 18, gst_rate: 12, low_stock_threshold: 5 },
+  });
+  check('POST duplicate medicine returns 409', dupePost.status === 409, JSON.stringify(dupePost.data));
+  check('POST duplicate medicine returns code MEDICINE_EXISTS', dupePost.data?.code === 'MEDICINE_EXISTS');
+  check('POST duplicate medicine returns existing_medicine_id', dupePost.data?.existing_medicine_id === dupeMedAId);
+
+  const dupeMedB = await call('/api/medicines', {
+    method: 'POST', token: owner,
+    body: { name: 'Another Medicine', company: 'DupeCo', type: 'Tablet', shelf: 'D3', buy_price: 5, sell_price: 8, gst_rate: 12, low_stock_threshold: 5 },
+  });
+  const dupeMedBId = dupeMedB.data?.id;
+
+  const dupePut = await call('/api/medicines/' + dupeMedBId, {
+    method: 'PUT', token: owner,
+    body: { name: 'Dupe Check Medicine', company: 'DupeCo' },
+  });
+  check('PUT duplicate medicine rename returns 409', dupePut.status === 409, JSON.stringify(dupePut.data));
+  check('PUT duplicate medicine returns code MEDICINE_EXISTS', dupePut.data?.code === 'MEDICINE_EXISTS');
+  check('PUT duplicate medicine returns existing_medicine_id', dupePut.data?.existing_medicine_id === dupeMedAId);
+
   // ---- Purchase reverse --------------------------------------------------
   const pur = await call('/api/purchases', {
     method: 'POST', token: owner,

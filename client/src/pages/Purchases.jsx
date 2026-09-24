@@ -1,5 +1,6 @@
 import MobileReviewList from '../components/MobileReviewList.jsx';
 import React, { useEffect, useState, useRef } from 'react';
+import { useLocation } from 'react-router-dom';
 import {
   Box, Typography, Button, Paper, Snackbar, Alert, Dialog, DialogTitle,
   DialogContent, DialogActions, TextField, MenuItem, Autocomplete, IconButton,
@@ -95,6 +96,33 @@ export default function Purchases({ initialLines, initialOpen, initialScannedNot
   const [scanProgressMeta, setScanProgressMeta] = useState({ page: 0, totalPages: 0, stage: '', thumbnails: [] });
   const [upgrade, setUpgrade] = useState(null);
   const can = (f) => tierAllows(userTier(user), f);
+
+  let locationState = null;
+  try {
+    const loc = useLocation();
+    locationState = loc?.state;
+  } catch {
+    /* safe if outside router in tests */
+  }
+
+  useEffect(() => {
+    if (locationState?.open && locationState?.prefillMedicineId) {
+      const medId = locationState.prefillMedicineId;
+      api('/api/medicines').then((medList) => {
+        setMedicines(medList);
+        const med = medList.find((m) => m.id === medId);
+        setHead({ supplier_name: '', invoice_number: '', date: todayStr() });
+        setLines([{
+          ...EMPTY_LINE,
+          medicine_id: medId,
+          buy_price: locationState.buyPrice ? String(locationState.buyPrice) : (med?.buy_price ? String(med.buy_price) : ''),
+        }]);
+        setScannedNotice(false);
+        setScanEngine(null);
+        setOpen(true);
+      }).catch(() => {});
+    }
+  }, [locationState]);
 
   const handleScanInvoice = async (e) => {
     if (!can('scanner')) {
