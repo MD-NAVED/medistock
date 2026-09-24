@@ -3,3 +3,130 @@ body,
 #root {
   height: 100%;
 }
+
+/* ==========================================================================
+   UX Polish: Light GPU-accelerated CSS animations (transform + opacity only)
+   ========================================================================== */
+
+/* 1. Bill Save Success: check-icon pop & green flash */
+@keyframes checkPop {
+  0% {
+    transform: scale(0);
+    opacity: 0;
+  }
+  70% {
+    transform: scale(1.1);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes greenFlash {
+  0% {
+    opacity: 0.6;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* 2. WhatsApp Bill Sent: Toast slide up & SVG checkmark draw */
+@keyframes toastSlideUp {
+  0% {
+    transform: translateY(16px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes checkmarkDraw {
+  0% {
+    stroke-dashoffset: 24;
+  }
+  100% {
+    stroke-dashoffset: 0;
+  }
+}
+
+.checkmark-draw {
+  stroke-dasharray: 24;
+  stroke-dashoffset: 24;
+  animation: checkmarkDraw 400ms cubic-bezier(0.65, 0, 0.45, 1) forwards;
+}
+
+/* 3. Scanner Results Stagger: Fade in + 8px slide up */
+@keyframes itemFadeSlide {
+  0% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 4. Page Transitions: Fade in + 4px slide up on route change */
+@keyframes pageFadeSlide {
+  0% {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.page-transition {
+  animation: pageFadeSlide 200ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* 5. Button Press: Contained buttons scale(0.97) on :active */
+.MuiButton-contained {
+  transition: transform 150ms ease-out !important;
+}
+
+.MuiButton-contained:active {
+  transform: scale(0.97) !important;
+}
+
+/* 6. Trial Banner: Gentle opacity pulse on urgent red (<3 days) state */
+@keyframes trialPulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}
+
+/* 7. Low Stock Alerts: Amber badge soft pulse */
+@keyframes amberBadgePulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.82;
+    transform: scale(0.97);
+  }
+}
+
+/* Accessibility: Disable all animations for users with prefers-reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

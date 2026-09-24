@@ -111,7 +111,11 @@ export default function AppLayout() {
               component={Link}
               to="/subscription"
               clickable
-              sx={{ mr: 1.5, fontWeight: 700 }}
+              sx={{
+                mr: 1.5,
+                fontWeight: 700,
+                ...(trialDaysLeft < 3 ? { animation: 'trialPulse 2s infinite ease-in-out' } : {}),
+              }}
             />
           )}
           <Chip
@@ -150,7 +154,9 @@ export default function AppLayout() {
 
       <Box component="main" sx={{ flexGrow: 1, p: { xs: 2, md: 3 }, minWidth: 0, width: { sm: `calc(100% - ${DRAWER_WIDTH}px)` } }}>
         <Toolbar />
-        <Outlet />
+        <Box key={location.pathname} className="page-transition">
+          <Outlet />
+        </Box>
       </Box>
     </Box>
   );

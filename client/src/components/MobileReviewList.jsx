@@ -127,7 +127,7 @@ export default function MobileReviewList({ lines, setLines, setLine, medicines, 
 
       {/* COMPACT ROW LAYOUT */}
       <Box sx={{ mt: 2, px: 1 }}>
-        {filteredItems.map((item) => {
+        {filteredItems.map((item, idx) => {
           const { originalIndex: i, status } = item;
           const isExpanded = !!expandedItems[i];
           const med = medicines.find((m) => m.id === item.medicine_id);
@@ -142,7 +142,11 @@ export default function MobileReviewList({ lines, setLines, setLine, medicines, 
                 mb: 1.5,
                 bgcolor: '#fafbfb',
                 border: hasError ? '1px solid #d32f2f' : hasWarning ? '1px solid #ed6c02' : '1px solid #e0e6e4',
-                overflow: 'hidden'
+                overflow: 'hidden',
+                ...(idx < 10 ? {
+                  animation: 'itemFadeSlide 200ms cubic-bezier(0.16, 1, 0.3, 1) both',
+                  animationDelay: `${idx * 30}ms`,
+                } : {}),
               }}
             >
               {/* Compact Summary Row */}

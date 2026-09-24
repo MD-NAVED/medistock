@@ -18,7 +18,17 @@ const theme = createTheme({
   },
   shape: { borderRadius: 10 },
   components: {
-    MuiButton: { defaultProps: { disableElevation: true } },
+    MuiButton: {
+      defaultProps: { disableElevation: true },
+      styleOverrides: {
+        contained: {
+          transition: 'transform 150ms ease-out',
+          '&:active': {
+            transform: 'scale(0.97)',
+          },
+        },
+      },
+    },
     MuiPaper: { defaultProps: { elevation: 0 }, styleOverrides: { root: { border: '1px solid #e0e6e4' } } },
   },
 });

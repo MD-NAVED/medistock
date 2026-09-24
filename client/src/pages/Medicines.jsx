@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Box, Typography, TextField, Button, Chip, Snackbar, Alert, Dialog,
   DialogTitle, DialogContent, DialogActions, MenuItem, IconButton, InputAdornment,
-  Paper, Divider, useMediaQuery, CircularProgress, Tooltip,
+  Paper, Divider, useMediaQuery, CircularProgress, Tooltip, Skeleton,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import AddIcon from '@mui/icons-material/Add';
@@ -59,6 +59,7 @@ function MedicineCard({ row, isOwner, onEdit, onBatches, onDelete }) {
           label={row.stock <= 0 ? 'Out of stock' : row.stock + ' units'}
           color={stockColor(row.stock, row.low_stock_threshold)}
           variant={row.stock <= row.low_stock_threshold ? 'filled' : 'outlined'}
+          sx={row.stock > 0 && row.stock <= row.low_stock_threshold ? { animation: 'amberBadgePulse 2.5s infinite ease-in-out' } : {}}
         />
         <Typography variant="caption" color="text.secondary">alert at ≤ {row.low_stock_threshold}</Typography>
         <Button size="small" startIcon={<InventoryIcon />} onClick={() => onBatches(row)} sx={{ ml: 'auto' }}>
@@ -221,6 +222,7 @@ export default function Medicines() {
           label={p.value + ' units'}
           color={p.value <= 0 ? 'error' : p.value <= p.row.low_stock_threshold ? 'warning' : 'success'}
           variant={p.value <= p.row.low_stock_threshold ? 'filled' : 'outlined'}
+          sx={p.value > 0 && p.value <= p.row.low_stock_threshold ? { animation: 'amberBadgePulse 2.5s infinite ease-in-out' } : {}}
         />
       ),
     },
@@ -274,19 +276,30 @@ export default function Medicines() {
 
       {isMobile ? (
         <Box>
-          {loading && (
-            <Box sx={{ display: 'flex', justifyContent: 'center', py: 5 }}><CircularProgress /></Box>
+          {loading && rows.length === 0 && (
+            <Box sx={{ py: 1 }}>
+              {[1, 2, 3, 4].map((n) => (
+                <Skeleton key={n} variant="rounded" height={110} sx={{ mb: 1.5, borderRadius: 2 }} animation="wave" />
+              ))}
+            </Box>
           )}
           {!loading && rows.length === 0 && (
             <Alert severity="info">No medicines found{q ? ` for “${q}”` : ''}.</Alert>
           )}
-          {!loading && rows.map((row) => (
+          {rows.map((row) => (
             <MedicineCard
               key={row.id} row={row} isOwner={isOwner}
               onEdit={openEdit} onBatches={setBatchFor} onDelete={askDelete}
             />
           ))}
         </Box>
+      ) : loading && rows.length === 0 ? (
+        <Paper sx={{ p: 2, height: 620, borderRadius: 2 }}>
+          <Skeleton variant="rounded" height={52} sx={{ mb: 2 }} animation="wave" />
+          {[1, 2, 3, 4, 5, 6].map((n) => (
+            <Skeleton key={n} variant="rounded" height={56} sx={{ mb: 1.5 }} animation="wave" />
+          ))}
+        </Paper>
       ) : (
         <Box sx={{ height: 620, bgcolor: 'background.paper', borderRadius: 2, border: '1px solid #e0e6e4' }}>
           <DataGrid

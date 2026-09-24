@@ -5,7 +5,7 @@ import {
   Box, Typography, Button, Paper, Snackbar, Alert, Dialog, DialogTitle,
   DialogContent, DialogActions, TextField, MenuItem, Autocomplete, IconButton,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Chip, Divider,
-  useMediaQuery, Tooltip, CircularProgress, LinearProgress, Stack,
+  useMediaQuery, Tooltip, CircularProgress, LinearProgress, Stack, Skeleton,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import AddIcon from '@mui/icons-material/Add';
@@ -65,6 +65,7 @@ export default function Purchases({ initialLines, initialOpen, initialScannedNot
   const isOwner = user?.role === 'owner';
   const isMobile = useMediaQuery('(max-width:900px)');
   const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [range, setRange] = useState({ from: '', to: '' });
   const [medicines, setMedicines] = useState([]);
   const [open, setOpen] = useState(initialOpen !== undefined ? initialOpen : false);
@@ -185,10 +186,14 @@ export default function Purchases({ initialLines, initialOpen, initialScannedNot
   };
 
   const load = () => {
+    setLoading(true);
     const qs = (range.from || range.to)
       ? `?from=${range.from || '1970-01-01'}&to=${range.to || '2999-12-31'}`
       : '';
-    api('/api/purchases' + qs).then(setRows).catch((e) => setSnack({ severity: 'error', message: e.message }));
+    api('/api/purchases' + qs)
+      .then(setRows)
+      .catch((e) => setSnack({ severity: 'error', message: e.message }))
+      .finally(() => setLoading(false));
   };
   useEffect(load, [range]);
 
@@ -428,7 +433,14 @@ export default function Purchases({ initialLines, initialOpen, initialScannedNot
 
       {isMobile ? (
         <Box>
-          {rows.length === 0 && (
+          {loading && rows.length === 0 && (
+            <Box sx={{ py: 1 }}>
+              {[1, 2, 3, 4].map((n) => (
+                <Skeleton key={n} variant="rounded" height={100} sx={{ mb: 1.5, borderRadius: 2 }} animation="wave" />
+              ))}
+            </Box>
+          )}
+          {!loading && rows.length === 0 && (
             <Alert severity="info">
               {(range.from || range.to)
                 ? 'No purchases found in this date range. Tap the ✕ to clear the filter.'
@@ -437,9 +449,16 @@ export default function Purchases({ initialLines, initialOpen, initialScannedNot
           )}
           {rows.map((row) => <PurchaseCard key={row.id} row={row} isOwner={isOwner} onOpen={openDetail} />)}
         </Box>
+      ) : loading && rows.length === 0 ? (
+        <Paper sx={{ p: 2, height: 560, borderRadius: 2 }}>
+          <Skeleton variant="rounded" height={52} sx={{ mb: 2 }} animation="wave" />
+          {[1, 2, 3, 4, 5, 6].map((n) => (
+            <Skeleton key={n} variant="rounded" height={56} sx={{ mb: 1.5 }} animation="wave" />
+          ))}
+        </Paper>
       ) : (
         <Box sx={{ height: 560, bgcolor: 'background.paper', borderRadius: 2, border: '1px solid #e0e6e4' }}>
-          <DataGrid rows={rows} columns={columns} pageSizeOptions={[25, 50]} disableRowSelectionOnClick sx={{ border: 'none' }} />
+          <DataGrid rows={rows} columns={columns} loading={loading} pageSizeOptions={[25, 50]} disableRowSelectionOnClick sx={{ border: 'none' }} />
         </Box>
       )}
 
@@ -454,7 +473,13 @@ export default function Purchases({ initialLines, initialOpen, initialScannedNot
         <DialogContent dividers>
           {detailError && <Alert severity="warning" sx={{ mb: 2 }} onClose={() => setDetailError('')}>{detailError}</Alert>}
           {!detail && !detailError && (
-            <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}><CircularProgress /></Box>
+            <Box sx={{ py: 2 }}>
+              <Skeleton variant="text" width="60%" height={24} sx={{ mb: 1 }} animation="wave" />
+              <Skeleton variant="rounded" height={36} sx={{ mb: 2 }} animation="wave" />
+              {[1, 2, 3].map((n) => (
+                <Skeleton key={n} variant="rounded" height={48} sx={{ mb: 1 }} animation="wave" />
+              ))}
+            </Box>
           )}
 
           {detail && (

@@ -54,6 +54,7 @@ export default function Alerts() {
                   <Chip
                     size="small" label={l.stock <= 0 ? 'OUT OF STOCK' : l.stock + ' left'}
                     color={l.stock <= 0 ? 'error' : 'warning'} variant="filled"
+                    sx={l.stock > 0 ? { animation: 'amberBadgePulse 2.5s infinite ease-in-out' } : {}}
                   />
                   <Typography variant="caption" color="text.secondary">alert at ≤ {l.low_stock_threshold}</Typography>
                   <Button size="small" variant="outlined" startIcon={<ShoppingCartIcon />} component={Link} to="/purchases">

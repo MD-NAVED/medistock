@@ -13,6 +13,7 @@ import PointOfSaleIcon from '@mui/icons-material/PointOfSale';
 import WhatsAppIcon from '@mui/icons-material/WhatsApp';
 import PrintIcon from '@mui/icons-material/Print';
 import LocalPharmacyRoundedIcon from '@mui/icons-material/LocalPharmacyRounded';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import { api } from '../api';
 import { printInvoice } from '../printInvoice';
 import { fmt, fmtDate } from '../utils';
@@ -38,6 +39,7 @@ export default function Billing() {
   const [udhaarAmt, setUdhaarAmt] = useState('');
   const [busy, setBusy] = useState(false);
   const [snack, setSnack] = useState(null);
+  const [whatsappToast, setWhatsappToast] = useState(false);
   const [invoice, setInvoice] = useState(null); // {sale, items} after success
   const { user } = useAuth();
   const [upgrade, setUpgrade] = useState(null);
@@ -404,9 +406,22 @@ export default function Billing() {
       {/* Invoice success dialog */}
       <Dialog open={!!invoice} onClose={() => setInvoice(null)} maxWidth="xs" fullWidth>
         {invoice && (
-          <>
+          <Box sx={{ position: 'relative', overflow: 'hidden' }}>
+            <Box
+              sx={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                bgcolor: '#4caf50',
+                pointerEvents: 'none',
+                zIndex: 10,
+                animation: 'greenFlash 300ms ease-out forwards',
+              }}
+            />
             <DialogTitle sx={{ textAlign: 'center', bgcolor: 'success.main', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1 }}>
-              <LocalPharmacyRoundedIcon /> Sale Complete!
+              <CheckCircleIcon sx={{ animation: 'checkPop 300ms cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards', fontSize: 26 }} /> Sale Complete!
             </DialogTitle>
             <DialogContent sx={{ textAlign: 'center', py: 3 }}>
               <Typography variant="body2" color="text.secondary">Invoice</Typography>
@@ -430,15 +445,38 @@ export default function Billing() {
                   onClick={() => {
                     if (!can('whatsapp_bill')) { setUpgrade({ feature: 'whatsapp_bill', requiredTier: 'pro' }); return; }
                     window.open(buildWhatsAppLink(invoice, settings?.store_name || 'MediStock Pharmacy'), '_blank', 'noopener');
+                    setWhatsappToast(true);
                   }}
                 >
                   Send on WhatsApp
                 </Button>
               )}
             </DialogActions>
-          </>
+          </Box>
         )}
       </Dialog>
+
+      {/* WhatsApp Bill Sent Toast */}
+      <Snackbar
+        open={whatsappToast}
+        autoHideDuration={4000}
+        onClose={() => setWhatsappToast(false)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        sx={{ animation: 'toastSlideUp 300ms ease-out' }}
+      >
+        <Alert
+          onClose={() => setWhatsappToast(false)}
+          severity="success"
+          icon={
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: '#2e7d32' }}>
+              <polyline points="20 6 9 17 4 12" className="checkmark-draw" />
+            </svg>
+          }
+          sx={{ width: '100%', alignItems: 'center', boxShadow: '0 4px 14px rgba(0,0,0,0.15)' }}
+        >
+          WhatsApp bill link opened!
+        </Alert>
+      </Snackbar>
 
       <UpgradeDialog open={!!upgrade} onClose={() => setUpgrade(null)} feature={upgrade?.feature} requiredTier={upgrade?.requiredTier} />
       <Snackbar open={!!snack} autoHideDuration={4500} onClose={() => setSnack(null)} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>

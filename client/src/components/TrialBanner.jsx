@@ -26,7 +26,12 @@ export default function TrialBanner({ showUpgradeButton = true, sx = {} }) {
           </Button>
         ) : null
       }
-      sx={{ mb: 2.5, fontWeight: 600, ...sx }}
+      sx={{
+        mb: 2.5,
+        fontWeight: 600,
+        ...(days < 3 ? { animation: 'trialPulse 2s infinite ease-in-out' } : {}),
+        ...sx,
+      }}
     >
       {text}
     </Alert>
