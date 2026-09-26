@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useState } from 'react';
 import { Navigate, Outlet } from 'react-router-dom';
 import * as Sentry from '@sentry/react';
 import { api } from './api';
+import { clearApiCache } from './cache';
 
 const AuthCtx = createContext(null);
 
@@ -72,6 +73,7 @@ export function AuthProvider({ children }) {
   const logout = () => {
     localStorage.removeItem('medistock_token');
     localStorage.removeItem('medistock_user');
+    clearApiCache();
     Sentry.setUser(null);
     setUser(null);
   };

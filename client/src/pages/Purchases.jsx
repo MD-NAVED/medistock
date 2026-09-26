@@ -18,7 +18,7 @@ import UploadFileIcon from '@mui/icons-material/UploadFile';
 import DocumentScannerIcon from '@mui/icons-material/DocumentScanner';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
-import { api } from '../api';
+import { api, getCachedData } from '../api';
 import { useAuth } from '../auth';
 import { tierAllows, userTier } from '../tiers';
 import UpgradeDialog from '../components/UpgradeDialog';
@@ -64,10 +64,10 @@ export default function Purchases({ initialLines, initialOpen, initialScannedNot
   const { user } = useAuth();
   const isOwner = user?.role === 'owner';
   const isMobile = useMediaQuery('(max-width:900px)');
-  const [rows, setRows] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [rows, setRows] = useState(() => getCachedData('/api/purchases') || []);
+  const [loading, setLoading] = useState(() => !(getCachedData('/api/purchases')?.length > 0));
   const [range, setRange] = useState({ from: '', to: '' });
-  const [medicines, setMedicines] = useState([]);
+  const [medicines, setMedicines] = useState(() => getCachedData('/api/medicines') || []);
   const [open, setOpen] = useState(initialOpen !== undefined ? initialOpen : false);
   const [busy, setBusy] = useState(false);
   const [snack, setSnack] = useState(null);
@@ -186,7 +186,7 @@ export default function Purchases({ initialLines, initialOpen, initialScannedNot
   };
 
   const load = () => {
-    setLoading(true);
+    if (rows.length === 0 || range.from || range.to) setLoading(true);
     const qs = (range.from || range.to)
       ? `?from=${range.from || '1970-01-01'}&to=${range.to || '2999-12-31'}`
       : '';

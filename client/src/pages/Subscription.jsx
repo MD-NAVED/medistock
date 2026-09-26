@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 import {
   Box, Typography, Paper, Button, Chip, Alert, Snackbar, CircularProgress,
   Divider, Stack, Grid, ToggleButtonGroup, ToggleButton, useMediaQuery, Collapse,
+  Skeleton,
 } from '@mui/material';
 import WorkspacePremiumIcon from '@mui/icons-material/WorkspacePremium';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import BoltIcon from '@mui/icons-material/Bolt';
 import RocketLaunchIcon from '@mui/icons-material/RocketLaunch';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import { api } from '../api';
+import { api, getCachedData } from '../api';
 import { useAuth } from '../auth';
 import TrialBanner from '../components/TrialBanner';
 
@@ -75,11 +76,12 @@ export default function Subscription() {
   const locked = new URLSearchParams(window.location.search).get('locked') === '1';
   const { user } = useAuth();
   const isNarrow = useMediaQuery('(max-width:600px)');
-  const [plans, setPlans] = useState([]);
-  const [gateway, setGateway] = useState('not_configured');
+  const cachedPlans = getCachedData('/api/billing/plans');
+  const [plans, setPlans] = useState(() => cachedPlans?.plans || []);
+  const [gateway, setGateway] = useState(() => cachedPlans?.gateway || 'not_configured');
   const [selectedPlan, setSelectedPlan] = useState('pro-yearly');
   const [expanded, setExpanded] = useState({ starter: true, pro: true, elite: true });
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !cachedPlans);
   const [paying, setPaying] = useState(false);
   const [snack, setSnack] = useState(null);
   const scriptLoaded = useRef(false);
@@ -159,8 +161,28 @@ export default function Subscription() {
     }
   };
 
-  if (loading) {
-    return <Box sx={{ display: 'grid', placeItems: 'center', py: 10 }}><CircularProgress /></Box>;
+  if (loading && plans.length === 0) {
+    return (
+      <Box sx={{ maxWidth: 980, mx: 'auto' }}>
+        <Skeleton variant="rounded" height={60} sx={{ mb: 3, borderRadius: 2 }} animation="wave" />
+        <Skeleton variant="rounded" height={90} sx={{ mb: 4, borderRadius: 2 }} animation="wave" />
+        <Grid container spacing={3}>
+          {[1, 2, 3].map((n) => (
+            <Grid item xs={12} md={4} key={n}>
+              <Paper sx={{ p: 3, height: 440, borderRadius: 2 }}>
+                <Skeleton variant="text" width="60%" height={32} animation="wave" />
+                <Skeleton variant="text" width="80%" height={20} sx={{ mb: 2 }} animation="wave" />
+                <Skeleton variant="rounded" height={44} sx={{ mb: 3 }} animation="wave" />
+                {[1, 2, 3, 4, 5].map((i) => (
+                  <Skeleton key={i} variant="text" width="90%" height={24} sx={{ mb: 1 }} animation="wave" />
+                ))}
+                <Skeleton variant="rounded" height={42} sx={{ mt: 4, borderRadius: 2 }} animation="wave" />
+              </Paper>
+            </Grid>
+          ))}
+        </Grid>
+      </Box>
+    );
   }
 
   return (

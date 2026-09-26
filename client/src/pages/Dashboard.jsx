@@ -10,7 +10,7 @@ import EventBusyIcon from '@mui/icons-material/EventBusy';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import WhatsAppIcon from '@mui/icons-material/WhatsApp';
 import { BarChart } from '@mui/x-charts/BarChart';
-import { api } from '../api';
+import { api, getCachedData } from '../api';
 import { fmt, fmtQty } from '../utils';
 import { useAuth } from '../auth';
 import { tierAllows, userTier } from '../tiers';
@@ -39,8 +39,8 @@ function StatCard({ icon, title, value, color, link, linkLabel }) {
 }
 
 export default function Dashboard() {
-  const [dash, setDash] = useState(null);
-  const [alerts, setAlerts] = useState(null);
+  const [dash, setDash] = useState(() => getCachedData('/api/reports/dashboard'));
+  const [alerts, setAlerts] = useState(() => getCachedData('/api/alerts'));
   const [error, setError] = useState('');
   const [waBusy, setWaBusy] = useState(false);
   const { user } = useAuth();
@@ -48,8 +48,14 @@ export default function Dashboard() {
   const can = (f) => tierAllows(userTier(user), f);
 
   useEffect(() => {
-    api('/api/reports/dashboard').then(setDash).catch((e) => setError(e.message));
-    api('/api/alerts').then(setAlerts).catch(() => {});
+    api('/api/reports/dashboard')
+      .then(setDash)
+      .catch((e) => {
+        if (!dash) setError(e.message);
+      });
+    api('/api/alerts')
+      .then(setAlerts)
+      .catch(() => {});
   }, []);
 
   // Fetch today's ready-made summary from the server and hand it to WhatsApp
@@ -67,15 +73,53 @@ export default function Dashboard() {
     setWaBusy(false);
   };
 
-  if (error) return <Alert severity="error">{error}</Alert>;
+  if (error && !dash) return <Alert severity="error">{error}</Alert>;
   if (!dash) {
     return (
-      <Grid container spacing={3}>
-        {[...Array(4)].map((_, i) => (
-          <Grid item xs={12} sm={6} md={3} key={i}><Skeleton variant="rounded" height={130} /></Grid>
-        ))}
-        <Grid item xs={12}><Skeleton variant="rounded" height={320} /></Grid>
-      </Grid>
+      <Box>
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
+          <Skeleton variant="text" width={160} height={36} animation="wave" />
+          <Skeleton variant="rounded" width={180} height={36} animation="wave" sx={{ borderRadius: 1 }} />
+        </Box>
+        <Grid container spacing={3} sx={{ mb: 3 }}>
+          {[1, 2, 3, 4].map((i) => (
+            <Grid item xs={12} sm={6} md={3} key={i}>
+              <Card sx={{ height: '100%' }}>
+                <CardContent>
+                  <Box sx={{ display: 'flex', alignItems: 'center', mb: 1.5 }}>
+                    <Skeleton variant="circular" width={44} height={44} sx={{ mr: 1.5 }} animation="wave" />
+                    <Skeleton variant="text" width="50%" height={20} animation="wave" />
+                  </Box>
+                  <Skeleton variant="text" width="70%" height={42} animation="wave" />
+                </CardContent>
+              </Card>
+            </Grid>
+          ))}
+        </Grid>
+        <Grid container spacing={3}>
+          <Grid item xs={12} md={7}>
+            <Paper sx={{ p: 3, height: 380 }}>
+              <Skeleton variant="text" width={180} height={28} sx={{ mb: 2 }} animation="wave" />
+              <Skeleton variant="rounded" height={290} animation="wave" sx={{ borderRadius: 2 }} />
+            </Paper>
+          </Grid>
+          <Grid item xs={12} md={5}>
+            <Paper sx={{ p: 3, height: 380 }}>
+              <Skeleton variant="text" width={160} height={28} sx={{ mb: 2 }} animation="wave" />
+              {[1, 2, 3, 4, 5].map((i) => (
+                <Box key={i} sx={{ display: 'flex', alignItems: 'center', py: 1.2 }}>
+                  <Skeleton variant="circular" width={28} height={28} sx={{ mr: 1.5 }} animation="wave" />
+                  <Box sx={{ flexGrow: 1 }}>
+                    <Skeleton variant="text" width="60%" height={20} animation="wave" />
+                    <Skeleton variant="text" width="40%" height={16} animation="wave" />
+                  </Box>
+                  <Skeleton variant="text" width={40} height={20} animation="wave" />
+                </Box>
+              ))}
+            </Paper>
+          </Grid>
+        </Grid>
+      </Box>
     );
   }
 

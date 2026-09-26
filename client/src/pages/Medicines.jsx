@@ -11,7 +11,7 @@ import EditIcon from '@mui/icons-material/Edit';
 import SearchIcon from '@mui/icons-material/Search';
 import DeleteIcon from '@mui/icons-material/DeleteOutline';
 import InventoryIcon from '@mui/icons-material/Inventory2';
-import { api } from '../api';
+import { api, getCachedData } from '../api';
 import { useAuth } from '../auth';
 import BatchDialog from '../components/BatchDialog';
 import MedicineLogo from '../components/MedicineLogo';
@@ -90,9 +90,9 @@ export default function Medicines() {
   const { user } = useAuth();
   const isOwner = user.role === 'owner';
   const isMobile = useMediaQuery('(max-width:900px)');
-  const [rows, setRows] = useState([]);
+  const [rows, setRows] = useState(() => getCachedData('/api/medicines') || []);
   const [q, setQ] = useState('');
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !(getCachedData('/api/medicines')?.length > 0));
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState(null); // medicine row being edited
   const [form, setForm] = useState(EMPTY_FORM);
@@ -104,7 +104,7 @@ export default function Medicines() {
   const [duplicateDialog, setDuplicateDialog] = useState(null); // { existingMedicineId, name, company, buyPrice }
 
   const load = useCallback(async (query) => {
-    setLoading(true);
+    if (query || rows.length === 0) setLoading(true);
     try {
       setRows(await api('/api/medicines?q=' + encodeURIComponent(query)));
     } catch (e) {
@@ -112,7 +112,7 @@ export default function Medicines() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [rows.length]);
 
   useEffect(() => {
     const t = setTimeout(() => load(q), 350); // debounce search

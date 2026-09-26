@@ -4,7 +4,7 @@ import {
   Box, Typography, Paper, Tabs, Tab, Chip, Skeleton, Button, Alert,
 } from '@mui/material';
 import ShoppingCartIcon from '@mui/icons-material/ShoppingCart';
-import { api } from '../api';
+import { api, getCachedData } from '../api';
 import { fmt, fmtDate, fmtQty } from '../utils';
 
 function ExpiryChip({ days_left }) {
@@ -16,14 +16,34 @@ function ExpiryChip({ days_left }) {
 }
 
 export default function Alerts() {
-  const [data, setData] = useState(null);
+  const [data, setData] = useState(() => getCachedData('/api/alerts'));
   const [tab, setTab] = useState(0);
 
   useEffect(() => {
     api('/api/alerts').then(setData).catch(() => {});
   }, []);
 
-  if (!data) return <Skeleton variant="rounded" height={400} />;
+  if (!data) {
+    return (
+      <Box>
+        <Skeleton variant="text" width={140} height={38} sx={{ mb: 3 }} animation="wave" />
+        <Skeleton variant="rounded" height={48} sx={{ mb: 3, borderRadius: 2 }} animation="wave" />
+        <Paper sx={{ p: { xs: 2, md: 3 }, borderRadius: 2 }}>
+          <Skeleton variant="text" width={280} height={24} sx={{ mb: 2 }} animation="wave" />
+          {[1, 2, 3, 4, 5].map((i) => (
+            <Box key={i} sx={{ display: 'flex', alignItems: 'center', gap: 2, py: 1.5, borderBottom: '1px solid #f0f0f0' }}>
+              <Box sx={{ flexGrow: 1 }}>
+                <Skeleton variant="text" width="60%" height={22} animation="wave" />
+                <Skeleton variant="text" width="40%" height={16} animation="wave" />
+              </Box>
+              <Skeleton variant="rounded" width={80} height={24} sx={{ borderRadius: 4 }} animation="wave" />
+              <Skeleton variant="rounded" width={90} height={30} sx={{ borderRadius: 1 }} animation="wave" />
+            </Box>
+          ))}
+        </Paper>
+      </Box>
+    );
+  }
 
   return (
     <Box>

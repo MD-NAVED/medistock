@@ -3,7 +3,7 @@ import {
   Box, Typography, Paper, TextField, Button, Autocomplete, Table, TableBody,
   TableCell, TableContainer, TableHead, TableRow, IconButton, Chip, Dialog,
   DialogTitle, DialogContent, DialogActions, Divider, Snackbar, Alert, InputAdornment,
-  Checkbox, FormControlLabel, useMediaQuery,
+  Checkbox, FormControlLabel, useMediaQuery, Skeleton,
 } from '@mui/material';
 import AddShoppingCartIcon from '@mui/icons-material/AddShoppingCart';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -14,7 +14,7 @@ import WhatsAppIcon from '@mui/icons-material/WhatsApp';
 import PrintIcon from '@mui/icons-material/Print';
 import LocalPharmacyRoundedIcon from '@mui/icons-material/LocalPharmacyRounded';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import { api } from '../api';
+import { api, getCachedData } from '../api';
 import { printInvoice } from '../printInvoice';
 import { fmt, fmtDate } from '../utils';
 import { buildWhatsAppLink } from '../utils/whatsapp';
@@ -28,8 +28,9 @@ import UpgradeDialog from '../components/UpgradeDialog';
 
 export default function Billing() {
   const isMobile = useMediaQuery('(max-width:900px)');
-  const [medicines, setMedicines] = useState([]);
-  const [settings, setSettings] = useState(null);
+  const [medicines, setMedicines] = useState(() => getCachedData('/api/medicines') || []);
+  const [settings, setSettings] = useState(() => getCachedData('/api/settings'));
+  const [medsLoading, setMedsLoading] = useState(() => !(getCachedData('/api/medicines')?.length > 0));
   const [selected, setSelected] = useState(null);
   const [qty, setQty] = useState(1);
   const [cart, setCart] = useState([]);
@@ -45,7 +46,12 @@ export default function Billing() {
   const [upgrade, setUpgrade] = useState(null);
   const can = (f) => tierAllows(userTier(user), f);
 
-  const loadMedicines = () => api('/api/medicines').then(setMedicines).catch(() => {});
+  const loadMedicines = () =>
+    api('/api/medicines')
+      .then(setMedicines)
+      .catch(() => {})
+      .finally(() => setMedsLoading(false));
+
   useEffect(() => {
     loadMedicines();
     api('/api/settings').then(setSettings).catch(() => {});
@@ -140,30 +146,34 @@ export default function Billing() {
         {/* LEFT: search + cart */}
         <Paper sx={{ p: { xs: 2, md: 3 }, flexGrow: 1, width: '100%' }}>
           <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
-            <Autocomplete
-              sx={{ flexGrow: 1, width: { xs: '100%', sm: 'auto' }, minWidth: { xs: 0, sm: 260 } }}
-              options={medicines}
-              value={selected}
-              onChange={(e, v) => setSelected(v)}
-              getOptionLabel={(o) => `${o.name} — ${o.company}`}
-              renderOption={(props, o) => {
-                const { key, ...rest } = props;
-                return (
-                  <li key={key} {...rest}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexGrow: 1 }}>
-                      <MedicineLogo src={o.logo_url} text={o.company || o.name} />
-                      <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-                        <Typography sx={{ fontSize: 14 }}>{o.name} <Typography component="span" variant="caption" color="text.secondary">— {o.company}</Typography></Typography>
-                        <Typography variant="caption" color={o.stock <= 0 ? 'error.main' : 'text.secondary'}>
-                          {fmt(o.sell_price)} · Stock: {o.stock} {o.stock <= 0 ? '(OUT OF STOCK)' : ''}
-                        </Typography>
+            {medsLoading && medicines.length === 0 ? (
+              <Skeleton variant="rounded" height={40} sx={{ flexGrow: 1, minWidth: { xs: '100%', sm: 260 } }} animation="wave" />
+            ) : (
+              <Autocomplete
+                sx={{ flexGrow: 1, width: { xs: '100%', sm: 'auto' }, minWidth: { xs: 0, sm: 260 } }}
+                options={medicines}
+                value={selected}
+                onChange={(e, v) => setSelected(v)}
+                getOptionLabel={(o) => `${o.name} — ${o.company}`}
+                renderOption={(props, o) => {
+                  const { key, ...rest } = props;
+                  return (
+                    <li key={key} {...rest}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexGrow: 1 }}>
+                        <MedicineLogo src={o.logo_url} text={o.company || o.name} />
+                        <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                          <Typography sx={{ fontSize: 14 }}>{o.name} <Typography component="span" variant="caption" color="text.secondary">— {o.company}</Typography></Typography>
+                          <Typography variant="caption" color={o.stock <= 0 ? 'error.main' : 'text.secondary'}>
+                            {fmt(o.sell_price)} · Stock: {o.stock} {o.stock <= 0 ? '(OUT OF STOCK)' : ''}
+                          </Typography>
+                        </Box>
                       </Box>
-                    </Box>
-                  </li>
-                );
-              }}
-              renderInput={(params) => <TextField {...params} label="Search medicine (name or company)" autoFocus size="small" />}
-            />
+                    </li>
+                  );
+                }}
+                renderInput={(params) => <TextField {...params} label="Search medicine (name or company)" autoFocus size="small" />}
+              />
+            )}
             <TextField
               size="small" type="number" label="Qty" value={qty}
               inputProps={{ min: 1 }}

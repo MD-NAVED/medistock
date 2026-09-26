@@ -2,13 +2,13 @@ import { useEffect, useState } from 'react';
 import {
   Box, Typography, Paper, TextField, Button, Table, TableBody, TableCell,
   TableContainer, TableHead, TableRow, IconButton, Chip, Dialog, DialogTitle,
-  DialogContent, DialogActions, MenuItem, Snackbar, Alert, InputAdornment,
+  DialogContent, DialogActions, MenuItem, Snackbar, Alert, InputAdornment, Skeleton,
 } from '@mui/material';
 import PersonAddAlt1Icon from '@mui/icons-material/PersonAddAlt1';
 import HistoryIcon from '@mui/icons-material/History';
 import PostAddIcon from '@mui/icons-material/PostAdd';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
-import { api } from '../api';
+import { api, getCachedData } from '../api';
 import { fmt, fmtDate, fmtDateTime } from '../utils';
 import { useAuth } from '../auth';
 import { tierAllows, userTier, FEATURE_MIN_TIER } from '../tiers';
@@ -28,7 +28,7 @@ const kindChip = (kind) => {
 };
 
 export default function Khata() {
-  const [rows, setRows] = useState(null);
+  const [rows, setRows] = useState(() => getCachedData('/api/khata'));
   const [error, setError] = useState('');
   const [snack, setSnack] = useState(null);
 
@@ -46,7 +46,9 @@ export default function Khata() {
   const askUpgrade = (f) => setUpgrade({ feature: f, requiredTier: FEATURE_MIN_TIER[f] });
   const gate = (f, fn) => () => (can(f) ? fn() : askUpgrade(f));
 
-  const load = () => api('/api/khata').then(setRows).catch((e) => setError(e.message));
+  const load = () => api('/api/khata').then(setRows).catch((e) => {
+    if (!rows) setError(e.message);
+  });
   useEffect(() => { load(); }, []);
 
   const openDetail = (id) => {
@@ -88,8 +90,28 @@ export default function Khata() {
     } finally { setBusy(false); }
   };
 
-  if (error) return <Alert severity="error">{error}</Alert>;
-  if (!rows) return <Typography color="text.secondary" sx={{ py: 6, textAlign: 'center' }}>Loading ledger…</Typography>;
+  if (error && !rows) return <Alert severity="error">{error}</Alert>;
+  if (!rows) {
+    return (
+      <Box>
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
+          <Skeleton variant="text" width={220} height={36} animation="wave" />
+          <Skeleton variant="rounded" width={140} height={36} animation="wave" sx={{ borderRadius: 1 }} />
+        </Box>
+        <Paper sx={{ p: 2, mb: 3, display: 'flex', gap: 2, alignItems: 'center' }}>
+          <Skeleton variant="circular" width={28} height={28} animation="wave" />
+          <Skeleton variant="text" width={240} height={28} animation="wave" />
+          <Skeleton variant="rounded" width={90} height={24} sx={{ borderRadius: 3 }} animation="wave" />
+        </Paper>
+        <Paper sx={{ p: 2, borderRadius: 2 }}>
+          <Skeleton variant="rounded" height={44} sx={{ mb: 2 }} animation="wave" />
+          {[1, 2, 3, 4, 5, 6].map((n) => (
+            <Skeleton key={n} variant="rounded" height={48} sx={{ mb: 1.5 }} animation="wave" />
+          ))}
+        </Paper>
+      </Box>
+    );
+  }
 
   const totalDue = rows.reduce((s, r) => s + Math.max(0, r.balance), 0);
   const dueCount = rows.filter((r) => r.balance > 0.004).length;
