@@ -300,6 +300,13 @@ function ensureSchema() {
       } catch (e) {
         console.warn('idx_purchases_store_invoice index note:', e.message);
       }
+      // Composite indexes for fast date-range reports & aggregations
+      try {
+        await pool.query('CREATE INDEX IF NOT EXISTS idx_sales_store_created ON sales (store_id, created_at DESC)');
+        await pool.query('CREATE INDEX IF NOT EXISTS idx_stock_writeoffs_store_created ON stock_writeoffs (store_id, created_at DESC)');
+      } catch (e) {
+        console.warn('report indexes note:', e.message);
+      }
 
       // One-time migration: pull every orphan (pre-multi-tenant) row into the
       // default store created from the original single-tenant settings row.
@@ -2008,36 +2015,46 @@ app.get('/api/reports/sales', requireAuth, requireFeature('reports'), async (req
     const from = DATE_RE.test(qFrom) ? qFrom : istDate(Date.now() - 29 * 86400000);
     const to = DATE_RE.test(qTo) ? qTo : istDate(Date.now());
 
-    const summary = (await pool.query(
-      `SELECT COUNT(DISTINCT s.id)::int AS bills, COALESCE(SUM((si.quantity - si.returned_qty) * si.unit_price * (1 + COALESCE(si.gst_rate,0)/100.0)), 0)::float8 AS revenue, COALESCE(SUM(si.quantity - si.returned_qty), 0)::int AS units, COALESCE(SUM((si.unit_price - si.cost_price) * (si.quantity - si.returned_qty)), 0)::float8 AS profit FROM sales s LEFT JOIN sale_items si ON si.sale_id = s.id WHERE s.store_id = $3 AND ${istDay('s.created_at')} BETWEEN $1 AND $2 AND s.status != 'cancelled'`,
-      [from, to, req.storeId]
-    )).rows[0];
+    const [
+      summaryRes,
+      refundsRes,
+      cancelledRes,
+      writeoffsRes,
+      bestSellersRes,
+      salesRes,
+    ] = await Promise.all([
+      pool.query(
+        `SELECT COUNT(DISTINCT s.id)::int AS bills, COALESCE(SUM((si.quantity - si.returned_qty) * si.unit_price * (1 + COALESCE(si.gst_rate,0)/100.0)), 0)::float8 AS revenue, COALESCE(SUM(si.quantity - si.returned_qty), 0)::int AS units, COALESCE(SUM((si.unit_price - si.cost_price) * (si.quantity - si.returned_qty)), 0)::float8 AS profit FROM sales s LEFT JOIN sale_items si ON si.sale_id = s.id WHERE s.store_id = $3 AND ${istDay('s.created_at')} BETWEEN $1 AND $2 AND s.status != 'cancelled'`,
+        [from, to, req.storeId]
+      ),
+      pool.query(
+        `SELECT COUNT(*)::int AS count, COALESCE(SUM(r.refund_amount),0)::float8 AS amount FROM sale_returns r JOIN sales s ON s.id = r.sale_id WHERE s.store_id = $3 AND ${istDay('r.created_at')} BETWEEN $1 AND $2`,
+        [from, to, req.storeId]
+      ),
+      pool.query(
+        `SELECT COUNT(*)::int AS count, COALESCE(SUM(total),0)::float8 AS amount FROM sales WHERE store_id = $3 AND status = 'cancelled' AND ${istDay('created_at')} BETWEEN $1 AND $2`,
+        [from, to, req.storeId]
+      ),
+      pool.query(
+        `SELECT COUNT(*)::int AS count, COALESCE(SUM(quantity),0)::int AS units, COALESCE(SUM(cost_value),0)::float8 AS loss FROM stock_writeoffs WHERE store_id = $3 AND ${istDay('created_at')} BETWEEN $1 AND $2`,
+        [from, to, req.storeId]
+      ),
+      pool.query(
+        `SELECT si.medicine_name AS name, si.company, SUM(si.quantity - si.returned_qty)::int AS qty, SUM((si.quantity - si.returned_qty) * si.unit_price)::float8 AS revenue, SUM((si.unit_price - si.cost_price) * (si.quantity - si.returned_qty))::float8 AS profit FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE s.store_id = $3 AND ${istDay('s.created_at')} BETWEEN $1 AND $2 AND s.status != 'cancelled' GROUP BY si.medicine_id, si.medicine_name, si.company HAVING SUM(si.quantity - si.returned_qty) > 0 ORDER BY qty DESC LIMIT 10`,
+        [from, to, req.storeId]
+      ),
+      pool.query(
+        `SELECT s.id, s.invoice_number, s.total::float8 AS total, s.subtotal::float8 AS subtotal, s.gst_amount::float8 AS gst_amount, s.created_at, s.status, u.name AS served_by, COUNT(si.id)::int AS item_count, COALESCE(SUM(si.returned_qty),0)::int AS returned_units FROM sales s JOIN users u ON u.id = s.user_id LEFT JOIN sale_items si ON si.sale_id = s.id WHERE s.store_id = $3 AND ${istDay('s.created_at')} BETWEEN $1 AND $2 GROUP BY s.id, u.name ORDER BY s.id DESC LIMIT 100`,
+        [from, to, req.storeId]
+      ),
+    ]);
 
-    // Cancellations, returns and written-off stock for the same window.
-    const refunds = (await pool.query(
-      `SELECT COUNT(*)::int AS count, COALESCE(SUM(r.refund_amount),0)::float8 AS amount FROM sale_returns r JOIN sales s ON s.id = r.sale_id WHERE s.store_id = $3 AND ${istDay('r.created_at')} BETWEEN $1 AND $2`,
-      [from, to, req.storeId]
-    )).rows[0];
-
-    const cancelled = (await pool.query(
-      `SELECT COUNT(*)::int AS count, COALESCE(SUM(total),0)::float8 AS amount FROM sales WHERE store_id = $3 AND status = 'cancelled' AND ${istDay('created_at')} BETWEEN $1 AND $2`,
-      [from, to, req.storeId]
-    )).rows[0];
-
-    const writeoffs = (await pool.query(
-      `SELECT COUNT(*)::int AS count, COALESCE(SUM(quantity),0)::int AS units, COALESCE(SUM(cost_value),0)::float8 AS loss FROM stock_writeoffs WHERE store_id = $3 AND ${istDay('created_at')} BETWEEN $1 AND $2`,
-      [from, to, req.storeId]
-    )).rows[0];
-
-    const bestSellers = (await pool.query(
-      `SELECT si.medicine_name AS name, si.company, SUM(si.quantity - si.returned_qty)::int AS qty, SUM((si.quantity - si.returned_qty) * si.unit_price)::float8 AS revenue, SUM((si.unit_price - si.cost_price) * (si.quantity - si.returned_qty))::float8 AS profit FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE s.store_id = $3 AND ${istDay('s.created_at')} BETWEEN $1 AND $2 AND s.status != 'cancelled' GROUP BY si.medicine_id, si.medicine_name, si.company HAVING SUM(si.quantity - si.returned_qty) > 0 ORDER BY qty DESC LIMIT 10`,
-      [from, to, req.storeId]
-    )).rows;
-
-    const sales = (await pool.query(
-      `SELECT s.id, s.invoice_number, s.total::float8 AS total, s.subtotal::float8 AS subtotal, s.gst_amount::float8 AS gst_amount, s.created_at, s.status, u.name AS served_by, COUNT(si.id)::int AS item_count, COALESCE(SUM(si.returned_qty),0)::int AS returned_units FROM sales s JOIN users u ON u.id = s.user_id LEFT JOIN sale_items si ON si.sale_id = s.id WHERE s.store_id = $3 AND ${istDay('s.created_at')} BETWEEN $1 AND $2 GROUP BY s.id, u.name ORDER BY s.id DESC LIMIT 100`,
-      [from, to, req.storeId]
-    )).rows;
+    const summary = summaryRes.rows[0];
+    const refunds = refundsRes.rows[0];
+    const cancelled = cancelledRes.rows[0];
+    const writeoffs = writeoffsRes.rows[0];
+    const bestSellers = bestSellersRes.rows;
+    const sales = salesRes.rows;
 
     res.json({ from, to, summary, refunds, cancelled, writeoffs, bestSellers, sales });
   } catch (e) { next(e); }

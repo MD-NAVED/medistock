@@ -259,7 +259,7 @@ export default function Medicines() {
     <Box>
       <Box sx={{ display: 'flex', gap: { xs: 1.5, md: 2 }, alignItems: 'center', mb: 2, flexWrap: 'wrap' }}>
         <Typography variant="h5" sx={{ flexGrow: 1, fontSize: { xs: 20, md: 24 } }}>
-          Medicines ({rows.length})
+          Medicines {loading && rows.length === 0 ? '(…)' : `(${rows.length})`}
         </Typography>
         <TextField
           size="small" placeholder="Search name or company…"

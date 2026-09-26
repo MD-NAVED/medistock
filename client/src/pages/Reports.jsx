@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   Box, Typography, Paper, TextField, Button, Grid, Avatar, Divider, Skeleton,
-  Chip, Snackbar, Alert, useMediaQuery,
+  Chip, Snackbar, Alert, useMediaQuery, CircularProgress,
 } from '@mui/material';
 import IndianRupeeIcon from '@mui/icons-material/CurrencyRupee';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
@@ -10,7 +10,7 @@ import InventoryIcon from '@mui/icons-material/Inventory2';
 import SearchIcon from '@mui/icons-material/Search';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import LockIcon from '@mui/icons-material/Lock';
-import { api } from '../api';
+import { api, getCachedData } from '../api';
 import { useAuth } from '../auth';
 import { tierAllows, userTier } from '../tiers';
 import { useNavigate } from 'react-router-dom';
@@ -35,15 +35,33 @@ export default function Reports() {
   const [from, setFrom] = useState(daysAgoStr(29));
   const [to, setTo] = useState(todayStr());
   const [applied, setApplied] = useState({ from: daysAgoStr(29), to: todayStr() });
-  const [data, setData] = useState(null);
-  const [settings, setSettings] = useState(null);
+  const defaultPath = `/api/reports/sales?from=${daysAgoStr(29)}&to=${todayStr()}`;
+  const [data, setData] = useState(() => getCachedData(defaultPath));
+  const [loading, setLoading] = useState(() => !getCachedData(defaultPath));
+  const [settings, setSettings] = useState(() => getCachedData('/api/settings'));
   const [openBillId, setOpenBillId] = useState(null);
   const [snack, setSnack] = useState('');
   const [showAll, setShowAll] = useState(false);
 
   const load = () => {
-    setData(null);
-    api(`/api/reports/sales?from=${applied.from}&to=${applied.to}`).then(setData).catch(() => {});
+    const path = `/api/reports/sales?from=${applied.from}&to=${applied.to}`;
+    const cached = getCachedData(path);
+    if (cached) {
+      setData(cached);
+    } else {
+      setLoading(true);
+      setData(null);
+    }
+    api(path)
+      .then((res) => {
+        setData(res);
+      })
+      .catch((e) => {
+        setSnack(e.message || 'Report fetch failed');
+      })
+      .finally(() => {
+        setLoading(false);
+      });
   };
 
   useEffect(load, [applied]);
@@ -84,22 +102,65 @@ export default function Reports() {
       </Paper>
 
       {!data ? (
-        <Skeleton variant="rounded" height={400} />
+        <Box sx={{ mt: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2.5, px: 0.5, color: 'text.secondary' }}>
+            <CircularProgress size={20} thickness={4} color="primary" />
+            <Typography variant="body2" sx={{ fontWeight: 600 }}>
+              Generating report… please wait
+            </Typography>
+          </Box>
+          <Grid container spacing={2.5} sx={{ mb: 2.5 }}>
+            {[1, 2, 3, 4].map((i) => (
+              <Grid item xs={12} sm={6} md={3} key={i}>
+                <Skeleton variant="rounded" height={94} sx={{ borderRadius: 2 }} animation="wave" />
+              </Grid>
+            ))}
+          </Grid>
+          <Paper sx={{ p: 2.5, mb: 3, borderRadius: 2 }}>
+            <Skeleton variant="text" width={220} height={24} sx={{ mb: 1.5 }} animation="wave" />
+            <Box sx={{ display: 'flex', gap: { xs: 2, md: 5 } }}>
+              {[1, 2, 3].map((i) => (
+                <Box key={i} sx={{ minWidth: 120 }}>
+                  <Skeleton variant="text" width={100} height={18} animation="wave" />
+                  <Skeleton variant="text" width={70} height={28} animation="wave" />
+                </Box>
+              ))}
+            </Box>
+          </Paper>
+          <Grid container spacing={3}>
+            <Grid item xs={12} md={5}>
+              <Paper sx={{ p: 3, height: 360, borderRadius: 2 }}>
+                <Skeleton variant="text" width={140} height={28} sx={{ mb: 2 }} animation="wave" />
+                {[1, 2, 3, 4].map((i) => (
+                  <Skeleton key={i} variant="rounded" height={44} sx={{ mb: 1.5, borderRadius: 1 }} animation="wave" />
+                ))}
+              </Paper>
+            </Grid>
+            <Grid item xs={12} md={7}>
+              <Paper sx={{ p: 3, height: 360, borderRadius: 2 }}>
+                <Skeleton variant="text" width={100} height={28} sx={{ mb: 2 }} animation="wave" />
+                {[1, 2, 3, 4].map((i) => (
+                  <Skeleton key={i} variant="rounded" height={44} sx={{ mb: 1.5, borderRadius: 1 }} animation="wave" />
+                ))}
+              </Paper>
+            </Grid>
+          </Grid>
+        </Box>
       ) : (
         <>
           <Grid container spacing={2.5} sx={{ mb: 2.5 }}>
             <Grid item xs={12} sm={6} md={3}>
-              <SummaryCard icon={<IndianRupeeIcon />} title="Net Revenue" value={fmt(data.summary.revenue)}
+              <SummaryCard icon={<IndianRupeeIcon />} title="Net Revenue" value={fmt(data.summary?.revenue || 0)}
                 color="primary" hint="cancelled bills & returns excluded" />
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
-              <SummaryCard icon={<TrendingUpIcon />} title="Net Profit" value={fmt(data.summary.profit)} color="success" />
+              <SummaryCard icon={<TrendingUpIcon />} title="Net Profit" value={fmt(data.summary?.profit || 0)} color="success" />
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
-              <SummaryCard icon={<ReceiptLongIcon />} title="Bills" value={String(data.summary.bills)} color="secondary" />
+              <SummaryCard icon={<ReceiptLongIcon />} title="Bills" value={String(data.summary?.bills || 0)} color="secondary" />
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
-              <SummaryCard icon={<InventoryIcon />} title="Units Sold" value={String(data.summary.units)} color="warning" />
+              <SummaryCard icon={<InventoryIcon />} title="Units Sold" value={String(data.summary?.units || 0)} color="warning" />
             </Grid>
           </Grid>
 
@@ -110,99 +171,111 @@ export default function Reports() {
               <Box>
                 <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Cancelled bills</Typography>
                 <Typography sx={{ fontWeight: 700 }}>
-                  {data.cancelled.count} <Typography component="span" variant="caption" color="text.secondary">
-                    ({fmt(data.cancelled.amount)})</Typography>
+                  {data.cancelled?.count || 0} <Typography component="span" variant="caption" color="text.secondary">
+                    ({fmt(data.cancelled?.amount || 0)})</Typography>
                 </Typography>
               </Box>
               <Box>
                 <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Refunds paid</Typography>
                 <Typography sx={{ fontWeight: 700 }}>
-                  {data.refunds.count} <Typography component="span" variant="caption" color="text.secondary">
-                    ({fmt(data.refunds.amount)})</Typography>
+                  {data.refunds?.count || 0} <Typography component="span" variant="caption" color="text.secondary">
+                    ({fmt(data.refunds?.amount || 0)})</Typography>
                 </Typography>
               </Box>
               <Box>
                 <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Expired / damaged stock</Typography>
-                <Typography sx={{ fontWeight: 700, color: data.writeoffs.loss > 0 ? 'error.main' : 'inherit' }}>
-                  {data.writeoffs.units} units <Typography component="span" variant="caption" color="text.secondary">
-                    (loss {fmt(data.writeoffs.loss)})</Typography>
+                <Typography sx={{ fontWeight: 700, color: (data.writeoffs?.loss || 0) > 0 ? 'error.main' : 'inherit' }}>
+                  {data.writeoffs?.units || 0} units <Typography component="span" variant="caption" color="text.secondary">
+                    (loss {fmt(data.writeoffs?.loss || 0)})</Typography>
                 </Typography>
               </Box>
             </Box>
           </Paper>
 
-          <Grid container spacing={3}>
-            <Grid item xs={12} md={5}>
-              <Paper sx={{ p: 3, height: '100%' }}>
-                <Typography variant="h6" sx={{ mb: 2 }}>🏆 Best Sellers</Typography>
-                {data.bestSellers.length === 0 && <Typography color="text.secondary">No sales in this period.</Typography>}
-                {data.bestSellers.map((b, i) => (
-                  <Box key={i} sx={{ py: 1.2, borderBottom: i < data.bestSellers.length - 1 ? '1px solid #f0f0f0' : 'none' }}>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1 }}>
-                      <Typography sx={{ fontSize: 14, fontWeight: 600 }}>{i + 1}. {b.name}</Typography>
-                      <Typography sx={{ fontSize: 14, fontWeight: 700, whiteSpace: 'nowrap' }}>{b.qty} units</Typography>
-                    </Box>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <Typography variant="caption" color="text.secondary">{b.company}</Typography>
-                      <Typography variant="caption" color="success.main" sx={{ fontWeight: 600 }}>profit {fmt(b.profit)}</Typography>
-                    </Box>
-                  </Box>
-                ))}
-              </Paper>
-            </Grid>
-
-            <Grid item xs={12} md={7}>
-              <Paper sx={{ p: { xs: 2, md: 3 }, height: '100%' }}>
-                <Typography variant="h6" sx={{ mb: 0.5 }}>Bills</Typography>
-                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
-                  Tap a bill to view it, reprint it, cancel it, or take items back.
-                </Typography>
-                {data.sales.length === 0 && <Typography color="text.secondary">No bills in this period.</Typography>}
-                {data.sales.slice(0, showAll ? undefined : 20).map((s) => (
-                  <Box
-                    key={s.id}
-                    component="button"
-                    type="button"
-                    onClick={() => setOpenBillId(s.id)}
-                    aria-label={`Open bill ${s.invoice_number}`}
-                    sx={{
-                      display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1,
-                      width: '100%', textAlign: 'left', font: 'inherit', color: 'inherit',
-                      background: 'none', border: 'none', borderBottom: '1px solid #f0f0f0',
-                      py: 1.2, px: 0.5, cursor: 'pointer', borderRadius: 1,
-                      '&:hover': { bgcolor: '#f5faf9' },
-                      '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: 2 },
-                    }}
-                  >
-                    <Box sx={{ minWidth: 0 }}>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-                        <Typography sx={{ fontSize: 14, fontWeight: 600 }}>{s.invoice_number}</Typography>
-                        {statusChip(s.status, s.returned_units)}
+          {(data.summary?.bills === 0 && (data.cancelled?.count || 0) === 0 && (data.writeoffs?.count || 0) === 0) ? (
+            <Paper sx={{ p: { xs: 3, md: 5 }, textAlign: 'center', borderRadius: 2, bgcolor: '#fafbfb', border: '1px dashed #cfd8dc' }}>
+              <ReceiptLongIcon sx={{ fontSize: 44, color: 'text.secondary', mb: 1 }} />
+              <Typography variant="h6" sx={{ fontWeight: 700, fontSize: { xs: 16, md: 18 } }}>
+                Is date range me koi sales record nahi mili
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, maxWidth: 440, mx: 'auto' }}>
+                Chuni hui tareekh ({applied.from} se {applied.to}) ke beech koi bill, return ya stock write-off nahi hua hai. Doosri date range chunein ya naya bill banayein.
+              </Typography>
+            </Paper>
+          ) : (
+            <Grid container spacing={3}>
+              <Grid item xs={12} md={5}>
+                <Paper sx={{ p: 3, height: '100%' }}>
+                  <Typography variant="h6" sx={{ mb: 2 }}>🏆 Best Sellers</Typography>
+                  {(data.bestSellers || []).length === 0 && <Typography color="text.secondary">No sales in this period.</Typography>}
+                  {(data.bestSellers || []).map((b, i) => (
+                    <Box key={i} sx={{ py: 1.2, borderBottom: i < (data.bestSellers || []).length - 1 ? '1px solid #f0f0f0' : 'none' }}>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1 }}>
+                        <Typography sx={{ fontSize: 14, fontWeight: 600 }}>{i + 1}. {b.name}</Typography>
+                        <Typography sx={{ fontSize: 14, fontWeight: 700, whiteSpace: 'nowrap' }}>{b.qty} units</Typography>
                       </Box>
-                      <Typography variant="caption" color="text.secondary">
-                        {fmtDateTime(s.created_at)} · {s.item_count} items · by {s.served_by}
-                      </Typography>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <Typography variant="caption" color="text.secondary">{b.company}</Typography>
+                        <Typography variant="caption" color="success.main" sx={{ fontWeight: 600 }}>profit {fmt(b.profit)}</Typography>
+                      </Box>
                     </Box>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                      <Typography sx={{
-                        fontWeight: 700, whiteSpace: 'nowrap',
-                        textDecoration: s.status === 'cancelled' ? 'line-through' : 'none',
-                        color: s.status === 'cancelled' ? 'text.disabled' : 'text.primary',
-                      }}>
-                        {fmt(s.total)}
-                      </Typography>
-                      <ChevronRightIcon fontSize="small" color="disabled" />
+                  ))}
+                </Paper>
+              </Grid>
+
+              <Grid item xs={12} md={7}>
+                <Paper sx={{ p: { xs: 2, md: 3 }, height: '100%' }}>
+                  <Typography variant="h6" sx={{ mb: 0.5 }}>Bills</Typography>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
+                    Tap a bill to view it, reprint it, cancel it, or take items back.
+                  </Typography>
+                  {(data.sales || []).length === 0 && <Typography color="text.secondary">No bills in this period.</Typography>}
+                  {(data.sales || []).slice(0, showAll ? undefined : 20).map((s) => (
+                    <Box
+                      key={s.id}
+                      component="button"
+                      type="button"
+                      onClick={() => setOpenBillId(s.id)}
+                      aria-label={`Open bill ${s.invoice_number}`}
+                      sx={{
+                        display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1,
+                        width: '100%', textAlign: 'left', font: 'inherit', color: 'inherit',
+                        background: 'none', border: 'none', borderBottom: '1px solid #f0f0f0',
+                        py: 1.2, px: 0.5, cursor: 'pointer', borderRadius: 1,
+                        '&:hover': { bgcolor: '#f5faf9' },
+                        '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: 2 },
+                      }}
+                    >
+                      <Box sx={{ minWidth: 0 }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                          <Typography sx={{ fontSize: 14, fontWeight: 600 }}>{s.invoice_number}</Typography>
+                          {statusChip(s.status, s.returned_units)}
+                        </Box>
+                        <Typography variant="caption" color="text.secondary">
+                          {fmtDateTime(s.created_at)} · {s.item_count} items · by {s.served_by}
+                        </Typography>
+                      </Box>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                        <Typography sx={{
+                          fontWeight: 700, whiteSpace: 'nowrap',
+                          textDecoration: s.status === 'cancelled' ? 'line-through' : 'none',
+                          color: s.status === 'cancelled' ? 'text.disabled' : 'text.primary',
+                        }}>
+                          {fmt(s.total)}
+                        </Typography>
+                        <ChevronRightIcon fontSize="small" color="disabled" />
+                      </Box>
                     </Box>
-                  </Box>
-                ))}
-                {data.sales.length > 20 && (
-                  <Button size="small" sx={{ mt: 1.5 }} onClick={() => setShowAll(!showAll)}>
-                    {showAll ? 'Show fewer' : `Show all ${data.sales.length} bills`}
-                  </Button>
-                )}
-              </Paper>
+                  ))}
+                  {(data.sales || []).length > 20 && (
+                    <Button size="small" sx={{ mt: 1.5 }} onClick={() => setShowAll(!showAll)}>
+                      {showAll ? 'Show fewer' : `Show all ${(data.sales || []).length} bills`}
+                    </Button>
+                  )}
+                </Paper>
+              </Grid>
             </Grid>
-          </Grid>
+          )}
         </>
       )}
 

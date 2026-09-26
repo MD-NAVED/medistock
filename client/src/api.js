@@ -5,7 +5,7 @@ export { getCachedData, setCachedData, invalidateCache, clearApiCache };
 
 // Read-heavy endpoints that benefit from SWR caching for instant cold-start & offline viewing
 const CACHEABLE_READ_PREFIXES = [
-  '/api/reports/dashboard',
+  '/api/reports',
   '/api/medicines',
   '/api/alerts',
   '/api/settings',
@@ -21,7 +21,7 @@ function isCacheableReadPath(path) {
 
 function invalidateRelatedCache(path) {
   if (path.startsWith('/api/sales') || path.startsWith('/api/purchases') || path.startsWith('/api/medicines')) {
-    invalidateCache('/api/reports/dashboard');
+    invalidateCache('/api/reports');
     invalidateCache('/api/alerts');
     invalidateCache('/api/medicines');
     invalidateCache('/api/purchases');
