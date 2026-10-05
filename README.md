@@ -7,7 +7,7 @@
 
 > A modern, cloud-native pharmacy point-of-sale and clinical inventory management platform designed for retail chemists, outpatient clinics, and community healthcare facilities. Built with strict FEFO batch tracking, multi-tenant clinical data isolation via PostgreSQL Row Level Security (RLS), and HL7 FHIR-aligned medication workflows.
 
-🌐 **Live Demo Web App:** [https://medistock-pharma.vercel.app](https://medistock-pharma.vercel.app)  
+🌐 **Live Demo Web App:** [https://medistock-pos.vercel.app](https://medistock-pos.vercel.app)  
 🎥 **Architecture & Workflow Video Walkthrough:** [Watch 5-Min Loom Demo](https://www.loom.com/share/963cae256dac49c88f2f950e4625c8b9)
 
 ---
