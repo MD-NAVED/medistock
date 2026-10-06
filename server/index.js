@@ -2181,8 +2181,11 @@ const IMPORT_CHUNK_LIMIT = 300;
 
 /* Accepts Date objects (cellDates), Excel serial days, and the common text
    formats Indian ERPs export (DD/MM/YYYY, DD-MM-YYYY, DD.MM.YY, YYYY-MM-DD,
-   MM/YYYY, M/YYYY, MM-YYYY, M-YYYY).
+   MM/YYYY, M/YYYY, MM-YYYY, MM.YYYY, MM/YY, MMM-YYYY, MMM/YYYY).
+   All month-only formats normalize to the LAST day of the specified month (e.g. 12/2027 -> 2027-12-31).
    Returns 'YYYY-MM-DD' or null when the value cannot be understood. */
+const IMPORT_MONTH_NAMES = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+
 function importDateToISO(v) {
   if (v === null || v === undefined || v === '') return null;
   if (v instanceof Date) {
@@ -2194,19 +2197,42 @@ function importDateToISO(v) {
     return new Date(Math.round((v - 25569) * 86400000)).toISOString().slice(0, 10);
   }
   const s = String(v).trim();
-  // Full date: YYYY-MM-DD or DD/MM/YYYY, DD-MM-YYYY, DD.MM.YY
-  let m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(s);
-  if (!m) m = /^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/.exec(s);
-  // Month/Year only: MM/YYYY, M/YYYY, MM-YYYY, M-YYYY (common for pharma expiry)
-  if (!m) m = /^(\d{1,2})[\/\-](\d{4})$/.exec(s);
-  if (!m) return null;
-  let y, mo, d;
-  if (/^\d{4}-/.test(s)) { y = +m[1]; mo = +m[2]; d = +m[3]; }
-  else if (m[1].length <= 2 && m[2].length === 4) { mo = +m[1]; y = +m[2]; d = 1; } // MM/YYYY -> 1st of month
-  else { d = +m[1]; mo = +m[2]; y = +m[3]; if (y < 100) y += 2000; }
-  const dt = new Date(Date.UTC(y, mo - 1, d));
-  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
-  return dt.toISOString().slice(0, 10);
+  // 1. Full date: YYYY-MM-DD
+  let m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(s);
+  if (m) {
+    const y = +m[1], mo = +m[2], d = +m[3];
+    const dt = new Date(Date.UTC(y, mo - 1, d));
+    if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
+    return dt.toISOString().slice(0, 10);
+  }
+  // 2. Full date: DD/MM/YYYY, DD-MM-YYYY, DD.MM.YY
+  m = /^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/.exec(s);
+  if (m) {
+    let d = +m[1], mo = +m[2], y = +m[3];
+    if (y < 100) y += 2000;
+    const dt = new Date(Date.UTC(y, mo - 1, d));
+    if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
+    return dt.toISOString().slice(0, 10);
+  }
+  // 3. Month/Year only: MM/YYYY, M/YYYY, MM-YYYY, MM.YYYY, MM/YY (common for pharma expiry -> month-end date)
+  m = /^(\d{1,2})[\/\-.](\d{2,4})$/.exec(s);
+  if (m) {
+    const mo = +m[1]; let y = +m[2];
+    if (y < 100) y += 2000;
+    if (mo < 1 || mo > 12) return null;
+    return new Date(Date.UTC(y, mo, 0)).toISOString().slice(0, 10);
+  }
+  // 4. Named month: MMM-YYYY, MMM/YYYY, MMM YYYY, MMM-YY (e.g. Aug-2027 -> month-end date)
+  m = /^([a-zA-Z]{3,9})[\/\-.\s]+(\d{2,4})$/.exec(s);
+  if (m) {
+    const prefix = m[1].slice(0, 3).toLowerCase();
+    const mo = IMPORT_MONTH_NAMES[prefix];
+    if (!mo) return null;
+    let y = +m[2];
+    if (y < 100) y += 2000;
+    return new Date(Date.UTC(y, mo, 0)).toISOString().slice(0, 10);
+  }
+  return null;
 }
 
 /* Loose number reader: tolerates ₹, commas, spaces ("1,250.50"). */
@@ -2283,6 +2309,12 @@ app.post('/api/import/commit', requireAuth, requireOwner, requireFeature('import
         const rowNum = Number(r.i) || idx + 1;
         const nm = String(r.name || '').trim();
         const co = (String(r.company || '').trim() || 'General');
+        // FIX 3: Silent Empty-Row Guard — ignore rows where all fields are completely blank
+        const hasAnyData = Boolean(
+          nm || r.company || r.type || r.shelf || r.gst_rate ||
+          r.buy_price || r.sell_price || r.batch_no || r.expiry_date || r.quantity
+        );
+        if (!hasAnyData) continue; // Trailing completely blank row — silently ignore
         if (!nm) { summary.skipped.push({ i: rowNum, reason: 'Medicine name missing' }); continue; }
 
         const cacheKey = nm.toLowerCase() + '|' + co.toLowerCase();

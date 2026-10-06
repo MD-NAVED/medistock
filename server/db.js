@@ -1,5 +1,8 @@
-const { Pool } = require('pg');
+const { Pool, types } = require('pg');
 const crypto = require('crypto');
+
+// Return PostgreSQL DATE (OID 1082) as raw 'YYYY-MM-DD' string to avoid local timezone offsets
+types.setTypeParser(1082, (str) => str);
 
 const connectionString = process.env.DATABASE_URL || 'postgres://postgres:postgres@localhost:5432/medistock';
 
