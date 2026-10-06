@@ -294,6 +294,11 @@ function ensureSchema() {
         await pool.query('ALTER TABLE medicines DROP CONSTRAINT IF EXISTS unique_medicine_company');
         await pool.query('ALTER TABLE medicines ADD CONSTRAINT unique_medicine_company_store UNIQUE (name, company, store_id)');
       } catch { /* already migrated */ }
+      try {
+        await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS idx_medicines_store_lower_name_company ON medicines (store_id, lower(name), lower(company))');
+      } catch (e) {
+        console.warn('idx_medicines_store_lower_name_company note:', e.message);
+      }
       // Scope purchase invoice numbers per-store (prevent accidental duplicate entries & stock doubling)
       try {
         await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS idx_purchases_store_invoice ON purchases (store_id, invoice_number)');
@@ -2281,13 +2286,13 @@ app.post('/api/import/parse', requireAuth, requireFeature('import'), requireOwne
   } catch (e) { next(e); }
 });
 
-app.post('/api/import/commit', requireAuth, requireOwner, requireFeature('import'), importLimiter, async (req, res, next) => {
+app.post('/api/import/commit', requireAuth, requireOwner, requireFeature('import'), async (req, res, next) => {
   try {
     const rows = Array.isArray((req.body || {}).rows) ? req.body.rows : [];
     if (!rows.length) return bad(res, 400, 'No rows to import');
-    if (rows.length > IMPORT_CHUNK_LIMIT) return bad(res, 400, 'Send at most 300 rows per request');
+    if (rows.length > IMPORT_MAX_ROWS) return bad(res, 400, `Maximum ${IMPORT_MAX_ROWS} rows allowed per import`);
 
-    // One companies snapshot per chunk — same slug+aliases matching as
+    // One companies snapshot per commit — same slug+aliases matching as
     // resolveCompanyLogo, without a query per row.
     const companies = (await pool.query('SELECT name, aliases, logo_url FROM companies')).rows;
     const logoFor = (companyName) => {
@@ -2300,87 +2305,239 @@ app.post('/api/import/commit', requireAuth, requireOwner, requireFeature('import
       return null;
     };
 
-    const summary = { created: 0, revived: 0, existing: 0, batches_added: 0, batches_updated: 0, stock_skipped: 0, skipped: [] };
+    const summary = {
+      created: 0,
+      revived: 0,
+      existing: 0,
+      batches_added: 0,
+      batches_updated: 0,
+      stock_skipped: 0,
+      skipped: [],
+    };
 
     await transaction(async (client) => {
-      const medCache = new Map();
+      // 1. Preload store's existing medicines into memory (1 query)
+      const existingMedsRes = await client.query(
+        'SELECT id, name, company, active FROM medicines WHERE store_id = $1',
+        [req.storeId]
+      );
+      const medMap = new Map();
+      for (const m of existingMedsRes.rows) {
+        const key = `${m.name.toLowerCase()}|${m.company.toLowerCase()}`;
+        medMap.set(key, { id: m.id, name: m.name, company: m.company, active: m.active });
+      }
+
+      // 2. Preload store's existing batches into memory (1 query)
+      const existingBatchesRes = await client.query(
+        'SELECT b.id, b.medicine_id, b.batch_number, b.quantity, b.expiry_date FROM batches b JOIN medicines m ON m.id = b.medicine_id WHERE m.store_id = $1',
+        [req.storeId]
+      );
+      const batchMap = new Map();
+      for (const b of existingBatchesRes.rows) {
+        const key = `${b.medicine_id}|${String(b.batch_number).trim()}`;
+        batchMap.set(key, { id: b.id, quantity: b.quantity, expiry_date: b.expiry_date });
+      }
+
+      // 3. Server-side row preparation & in-memory validation
+      const medUpsertMap = new Map(); // key -> med row object
+      const validStockRows = []; // array of { rowNum, medKey, qty, expiryISO, batchNo }
+
       for (let idx = 0; idx < rows.length; idx++) {
         const r = rows[idx] || {};
         const rowNum = Number(r.i) || idx + 1;
         const nm = String(r.name || '').trim();
         const co = (String(r.company || '').trim() || 'General');
+
         // FIX 3: Silent Empty-Row Guard — ignore rows where all fields are completely blank
         const hasAnyData = Boolean(
           nm || r.company || r.type || r.shelf || r.gst_rate ||
           r.buy_price || r.sell_price || r.batch_no || r.expiry_date || r.quantity
         );
         if (!hasAnyData) continue; // Trailing completely blank row — silently ignore
-        if (!nm) { summary.skipped.push({ i: rowNum, reason: 'Medicine name missing' }); continue; }
 
-        const cacheKey = nm.toLowerCase() + '|' + co.toLowerCase();
-        let med = medCache.get(cacheKey);
-        if (med === undefined) {
-          const found = (await client.query(
-            'SELECT id, active FROM medicines WHERE lower(name) = lower($1) AND lower(company) = lower($2) AND store_id = $3 ORDER BY id LIMIT 1',
-            [nm, co, req.storeId]
-          )).rows[0];
-          med = found || null;
-          medCache.set(cacheKey, med);
+        // 1. Validate medicine name
+        if (!nm) {
+          summary.skipped.push({ i: rowNum, reason: 'Medicine name missing' });
+          continue;
         }
 
-        if (!med) {
-          const type = (String(r.type || '').trim() || 'Tablet').slice(0, 100);
-          const shelf = (String(r.shelf || '').trim() || '').slice(0, 50);
-          const buy = Math.max(0, importNumber(r.buy_price) || 0);
-          const sell = Math.max(0, importNumber(r.sell_price) || 0);
-          let gst = importNumber(r.gst_rate);
-          if (!isFinite(gst) || gst < 0 || gst > 100) gst = 12;
-          const ins = await client.query(
-            'INSERT INTO medicines (name, company, type, shelf, buy_price, sell_price, gst_rate, low_stock_threshold, logo_url, store_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id',
-            [nm, co, type, shelf, buy, sell, gst, 10, logoFor(co), req.storeId]
-          );
-          med = { id: ins.rows[0].id, active: 1 };
-          medCache.set(cacheKey, med);
-          summary.created++;
-        } else if (med.active !== 1) {
-          // Same name+company was removed earlier — revive with the imported values
-          await client.query(
-            'UPDATE medicines SET active = 1, type = $1, shelf = $2, buy_price = $3, sell_price = $4, gst_rate = $5 WHERE id = $6',
-            [(String(r.type || '').trim() || 'Tablet').slice(0, 100), (String(r.shelf || '').trim() || '').slice(0, 50),
-             Math.max(0, importNumber(r.buy_price) || 0), Math.max(0, importNumber(r.sell_price) || 0),
-             (importNumber(r.gst_rate) >= 0 && importNumber(r.gst_rate) <= 100 ? importNumber(r.gst_rate) : 12), med.id]
-          );
-          med.active = 1;
-          summary.revived++;
+        // 2. Validate quantity & expiry format
+        const qty = Math.trunc(importNumber(r.quantity));
+        let expiryISO = null;
+        if (qty > 0) {
+          expiryISO = importDateToISO(r.expiry_date);
+          if (!expiryISO) {
+            summary.stock_skipped++;
+            summary.skipped.push({
+              i: rowNum,
+              reason: 'Expiry date not readable (' + String(r.expiry_date || 'blank') + ')',
+            });
+            continue; // Row failed validation — skip medicine & batch insertion
+          }
+        }
+
+        // 3. Match or schedule medicine
+        const cacheKey = `${nm.toLowerCase()}|${co.toLowerCase()}`;
+        const existing = medMap.get(cacheKey);
+
+        if (!existing) {
+          if (!medUpsertMap.has(cacheKey)) {
+            const type = (String(r.type || '').trim() || 'Tablet').slice(0, 100);
+            const shelf = (String(r.shelf || '').trim() || '').slice(0, 50);
+            const buy = Math.max(0, importNumber(r.buy_price) || 0);
+            const sell = Math.max(0, importNumber(r.sell_price) || 0);
+            let gst = importNumber(r.gst_rate);
+            if (!isFinite(gst) || gst < 0 || gst > 100) gst = 12;
+
+            medUpsertMap.set(cacheKey, {
+              name: nm, company: co, type, shelf, buy_price: buy, sell_price: sell, gst_rate: gst,
+              low_stock_threshold: 10, logo_url: logoFor(co), store_id: req.storeId,
+            });
+            summary.created++;
+          } else {
+            // Duplicate row of a new medicine within the same import file
+            summary.existing++;
+          }
+        } else if (existing.active !== 1) {
+          if (!medUpsertMap.has(cacheKey)) {
+            const type = (String(r.type || '').trim() || 'Tablet').slice(0, 100);
+            const shelf = (String(r.shelf || '').trim() || '').slice(0, 50);
+            const buy = Math.max(0, importNumber(r.buy_price) || 0);
+            const sell = Math.max(0, importNumber(r.sell_price) || 0);
+            let gst = importNumber(r.gst_rate);
+            if (!isFinite(gst) || gst < 0 || gst > 100) gst = 12;
+
+            medUpsertMap.set(cacheKey, {
+              name: nm, company: co, type, shelf, buy_price: buy, sell_price: sell, gst_rate: gst,
+              low_stock_threshold: 10, logo_url: logoFor(co), store_id: req.storeId,
+            });
+            summary.revived++;
+          } else {
+            summary.existing++;
+          }
         } else {
+          // Pre-existing active medicine in database
           summary.existing++;
         }
 
-        const qty = Math.trunc(importNumber(r.quantity));
-        if (qty > 0) {
-          const expiryISO = importDateToISO(r.expiry_date);
-          if (!expiryISO) {
-            summary.stock_skipped++;
-            summary.skipped.push({ i: rowNum, reason: 'Stock not added — expiry date not readable (' + String(r.expiry_date || 'blank') + ')' });
-          } else {
-            const bn = (String(r.batch_no || '').trim() || 'OPENING').slice(0, 255);
-            const existing = (await client.query(
-              'SELECT id FROM batches WHERE medicine_id = $1 AND batch_number = $2',
-              [med.id, bn]
-            )).rows[0];
-            if (existing) {
-              await client.query('UPDATE batches SET quantity = quantity + $1, expiry_date = $2 WHERE id = $3', [qty, expiryISO, existing.id]);
-              summary.batches_updated++;
-            } else {
-              await client.query('INSERT INTO batches (medicine_id, batch_number, expiry_date, quantity, store_id) VALUES ($1, $2, $3, $4, $5)', [med.id, bn, expiryISO, qty, req.storeId]);
-              summary.batches_added++;
-            }
-          }
+        if (qty > 0 && expiryISO) {
+          const bn = (String(r.batch_no || '').trim() || 'OPENING').slice(0, 255);
+          validStockRows.push({ rowNum, medKey: cacheKey, qty, expiryISO, batchNo: bn });
         }
+      }
+
+      // 4. Batch upsert medicines via UNNEST (chunks of 500)
+      const medsToUpsert = Array.from(medUpsertMap.values());
+      const BATCH_CHUNK = 500;
+      for (let i = 0; i < medsToUpsert.length; i += BATCH_CHUNK) {
+        const chunk = medsToUpsert.slice(i, i + BATCH_CHUNK);
+        const names = chunk.map((c) => c.name);
+        const companies = chunk.map((c) => c.company);
+        const types = chunk.map((c) => c.type);
+        const shelves = chunk.map((c) => c.shelf);
+        const buyPrices = chunk.map((c) => c.buy_price);
+        const sellPrices = chunk.map((c) => c.sell_price);
+        const gstRates = chunk.map((c) => c.gst_rate);
+        const thresholds = chunk.map((c) => c.low_stock_threshold);
+        const logoUrls = chunk.map((c) => c.logo_url);
+        const storeIds = chunk.map((c) => c.store_id);
+        const actives = chunk.map(() => 1);
+
+        const upsertRes = await client.query(`
+          INSERT INTO medicines (name, company, type, shelf, buy_price, sell_price, gst_rate, low_stock_threshold, logo_url, store_id, active)
+          SELECT * FROM unnest(
+            $1::text[], $2::text[], $3::text[], $4::text[],
+            $5::numeric[], $6::numeric[], $7::numeric[], $8::int[],
+            $9::text[], $10::int[], $11::int[]
+          )
+          ON CONFLICT (store_id, lower(name), lower(company))
+          DO UPDATE SET
+            active = 1,
+            type = EXCLUDED.type,
+            shelf = EXCLUDED.shelf,
+            buy_price = EXCLUDED.buy_price,
+            sell_price = EXCLUDED.sell_price,
+            gst_rate = EXCLUDED.gst_rate,
+            logo_url = COALESCE(medicines.logo_url, EXCLUDED.logo_url)
+          RETURNING id, lower(name) AS lower_name, lower(company) AS lower_company
+        `, [names, companies, types, shelves, buyPrices, sellPrices, gstRates, thresholds, logoUrls, storeIds, actives]);
+
+        for (const r of upsertRes.rows) {
+          const key = `${r.lower_name}|${r.lower_company}`;
+          medMap.set(key, { id: r.id, name: r.lower_name, company: r.lower_company, active: 1 });
+        }
+      }
+
+      // 5. In-memory consolidation of batches before UNNEST
+      const batchConsolidated = new Map();
+      for (const vs of validStockRows) {
+        const med = medMap.get(vs.medKey);
+        if (!med || !med.id) continue;
+        const bKey = `${med.id}|${vs.batchNo}`;
+        const existingConsolidated = batchConsolidated.get(bKey);
+        if (existingConsolidated) {
+          existingConsolidated.quantity += vs.qty;
+          existingConsolidated.expiry_date = vs.expiryISO;
+        } else {
+          batchConsolidated.set(bKey, {
+            medicine_id: med.id,
+            batch_number: vs.batchNo,
+            expiry_date: vs.expiryISO,
+            quantity: vs.qty,
+            store_id: req.storeId,
+          });
+        }
+      }
+
+      // Track batch summary stats
+      const batchesList = Array.from(batchConsolidated.values());
+      for (const b of batchesList) {
+        const existingDbBatch = batchMap.get(`${b.medicine_id}|${b.batch_number}`);
+        if (existingDbBatch) {
+          summary.batches_updated++;
+        } else {
+          summary.batches_added++;
+        }
+      }
+
+      // 6. Batch upsert batches via UNNEST (chunks of 500)
+      for (let i = 0; i < batchesList.length; i += BATCH_CHUNK) {
+        const chunk = batchesList.slice(i, i + BATCH_CHUNK);
+        const medIds = chunk.map((c) => c.medicine_id);
+        const batchNos = chunk.map((c) => c.batch_number);
+        const expiries = chunk.map((c) => c.expiry_date);
+        const quantities = chunk.map((c) => c.quantity);
+        const storeIds = chunk.map((c) => c.store_id);
+
+        await client.query(`
+          INSERT INTO batches (medicine_id, batch_number, expiry_date, quantity, store_id)
+          SELECT * FROM unnest(
+            $1::int[],
+            $2::varchar[],
+            $3::date[],
+            $4::int[],
+            $5::int[]
+          )
+          ON CONFLICT (medicine_id, batch_number)
+          DO UPDATE SET
+            quantity = EXCLUDED.quantity,
+            expiry_date = EXCLUDED.expiry_date
+        `, [medIds, batchNos, expiries, quantities, storeIds]);
       }
     });
 
-    res.json(summary);
+    res.json({
+      imported: summary.created + summary.revived + summary.existing,
+      created: summary.created,
+      revived: summary.revived,
+      existing: summary.existing,
+      batches_added: summary.batches_added,
+      batches_updated: summary.batches_updated,
+      stock_skipped: summary.stock_skipped,
+      skipped_count: summary.skipped.length,
+      skipped: summary.skipped,
+      skipped_details: summary.skipped,
+    });
   } catch (e) { next(e); }
 });
 
