@@ -293,3 +293,7 @@ To prevent unintended cross-tenant modifications or data corruption during opera
 3. **Pre-Commit Row Count Assertion**:
    - Any script performing administrative updates must execute inside an explicit PostgreSQL transaction (`BEGIN ... COMMIT`).
    - The script must check and print the affected `rowCount` **BEFORE** committing. If `rowCount !== expectedCount`, the script must execute `ROLLBACK` and immediately terminate with an error.
+
+4. **Zero Hardcoded Secrets in Test Scripts**:
+   - Test and utility scripts must NEVER hardcode credentials, connection strings, or high-entropy passwords. Always load from environment variables (`process.env.SUPABASE_DB_URL`, `process.env.DATABASE_URL`, or `.env`).
+   - Automated secret scanners (GitGuardian) actively scan all commits and PRs. Treat GitGuardian alerts as **P1 incidents** that block deployment until analyzed, remediated, and verified.

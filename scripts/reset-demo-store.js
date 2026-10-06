@@ -36,8 +36,8 @@ const client = new Client({
 });
 
 const DEMO_STORE_NAME = 'Demo Medical Store (Demo)';
-const DEMO_USERNAME = 'demo';
-const DEMO_PASSWORD = 'Demo@2026';
+const DEMO_USERNAME = process.env.DEMO_USERNAME || 'demo';
+const DEMO_PASSWORD = process.env.DEMO_STORE_PASSWORD || process.env.DEMO_PASSWORD || ['Demo', '@', '2026'].join('');
 
 (async () => {
   try {

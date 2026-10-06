@@ -11,10 +11,26 @@
  * 7. Clean teardown of synthetic test data
  */
 const { Client } = require('pg');
+const fs = require('fs');
+const path = require('path');
+
+// Safe environment loading from .env if running standalone (not inside local-test harness)
+if (!process.env.DATABASE_URL) {
+  const envPath = path.resolve(__dirname, '../.env');
+  if (fs.existsSync(envPath)) {
+    const lines = fs.readFileSync(envPath, 'utf8').split('\n');
+    for (const line of lines) {
+      const m = line.trim().match(/^([A-Z0-9_]+)=(.*)$/);
+      if (m && !process.env[m[1]]) {
+        process.env[m[1]] = m[2].trim().replace(/^['"]|['"]$/g, '');
+      }
+    }
+  }
+}
 
 const RAW_BASE = process.env.BASE || 'http://localhost:3001';
 const BASE = RAW_BASE;
-const DB_URL = process.env.DATABASE_DIRECT_URL || process.env.DATABASE_URL || 'postgres://postgres:postgres@localhost:5433/medistock';
+const DB_URL = process.env.DATABASE_URL || process.env.DATABASE_DIRECT_URL || process.env.SUPABASE_DB_URL;
 
 let pass = 0, fail = 0;
 const results = [];
@@ -46,15 +62,19 @@ async function call(pathname, { method = 'GET', body, token } = {}) {
 (async () => {
   console.log('\n=== Import Scale Hardening Acceptance Test (<8s SLA) ===');
 
-  // 1. Authenticate (try demo user first, fallback to owner)
+  // 1. Authenticate (load from environment variables)
+  const testUser = process.env.TEST_USER || process.env.DEMO_USER || 'owner';
+  const testPass = process.env.TEST_PASSWORD || process.env.DEMO_PASSWORD || 'owner123';
+
   let token = null;
   let loginRes = await call('/api/auth/login', {
     method: 'POST',
-    body: { username: 'demo', password: 'Demo@2026' },
+    body: { username: testUser, password: testPass },
   });
   if (loginRes.status === 200 && loginRes.data?.token) {
     token = loginRes.data.token;
   } else {
+    // Secondary fallback for local test harness runner
     loginRes = await call('/api/auth/login', {
       method: 'POST',
       body: { username: 'owner', password: 'owner123' },
@@ -70,13 +90,16 @@ async function call(pathname, { method = 'GET', body, token } = {}) {
     process.exit(1);
   }
 
-  // Connect to DB for independent direct verification
+  // Connect to DB for independent direct verification (if configured in environment)
   let dbClient = null;
-  try {
-    dbClient = new Client({ connectionString: DB_URL, ssl: DB_URL.includes('supabase') ? { rejectUnauthorized: false } : false });
-    await dbClient.connect();
-  } catch (err) {
-    console.warn('[DB Note] Could not connect directly to DB, will verify via API endpoints:', err.message);
+  if (DB_URL) {
+    try {
+      dbClient = new Client({ connectionString: DB_URL, ssl: DB_URL.includes('supabase') ? { rejectUnauthorized: false } : false });
+      await dbClient.connect();
+    } catch (err) {
+      console.warn('[DB Note] Could not connect directly to DB, will verify via API endpoints:', err.message);
+      dbClient = null;
+    }
   }
 
   const TEST_PREFIX = 'ScaleMed_';
