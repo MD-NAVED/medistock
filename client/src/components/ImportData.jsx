@@ -171,33 +171,46 @@ export default function ImportData({ onImported }) {
     }
   };
 
+  const downloadErrorReport = () => {
+    const errorRows = [
+      ['Row', 'Medicine Name', 'Company', 'MRP', 'Batch No', 'Expiry Date', 'Stock Qty', 'Reason'],
+    ];
+    mapped.forEach((r, i) => {
+      const prob = problems[i];
+      if (prob) {
+        errorRows.push([
+          r.i || i + 1,
+          r.name || '',
+          r.company || '',
+          r.sell_price || '',
+          r.batch_no || '',
+          r.expiry_date || '',
+          r.quantity || '',
+          prob,
+        ]);
+      }
+    });
+    downloadCsv('MediStock-Import-Error-Report.csv', errorRows);
+  };
+
   const runImport = async () => {
     setBusy(true);
     setError('');
-    setStep('preview');
     const clean = mapped.filter((r) => !rowProblem(r));
-    const totals = { created: 0, revived: 0, existing: 0, batches_added: 0, batches_updated: 0, stock_skipped: 0, skipped: [] };
-    let chunkNo = 0;
+    if (!clean.length) {
+      setError('No valid rows to import');
+      setBusy(false);
+      return;
+    }
     try {
-      for (let i = 0; i < clean.length; i += CHUNK) {
-        chunkNo = Math.floor(i / CHUNK) + 1;
-        const part = clean.slice(i, i + CHUNK).map((r, j) => ({ ...r, i: i + j + 1 }));
-        const s = await api('/api/import/commit', { method: 'POST', body: { rows: part } });
-        totals.created += s.created;
-        totals.revived += s.revived;
-        totals.existing += s.existing;
-        totals.batches_added += s.batches_added;
-        totals.batches_updated += s.batches_updated;
-        totals.stock_skipped += s.stock_skipped;
-        totals.skipped.push(...s.skipped);
-        setProgress(Math.min(100, Math.round(((i + part.length) / clean.length) * 100)));
-      }
-      setSummary(totals);
+      setProgress(50);
+      const s = await api('/api/import/commit', { method: 'POST', body: { rows: clean } });
+      setProgress(100);
+      setSummary(s);
       setStep('done');
       onImported?.();
     } catch (e) {
-      setError(e.message + ' — problem in chunk ' + chunkNo + '. The rest is already imported, please try again.');
-      setStep('map');
+      setError(e.message || 'Import failed. No data was saved (transaction rolled back). Please try again.');
     } finally {
       setBusy(false);
     }
@@ -295,6 +308,17 @@ export default function ImportData({ onImported }) {
                   </Typography>
                 )}
               </Stack>
+              <Box sx={{ mt: 1.5 }}>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  color="warning"
+                  startIcon={<DownloadIcon />}
+                  onClick={downloadErrorReport}
+                >
+                  Download error report (CSV)
+                </Button>
+              </Box>
             </Alert>
           )}
 
@@ -353,7 +377,7 @@ export default function ImportData({ onImported }) {
           {mapped.length > 100 && <Typography variant="caption" color="text.secondary">…and {mapped.length - 100} more rows</Typography>}
           <Stack direction="row" spacing={1.5} sx={{ mt: 3 }}>
             <Button variant="contained" color="success" disabled={busy || !okCount} onClick={runImport}>
-              {busy ? `Importing… ${progress}%` : `Import now (${okCount} rows)`}
+              {busy ? `Importing ${okCount} medicines… ${progress}%` : `Import now (${okCount} rows)`}
             </Button>
             <Button disabled={busy} onClick={() => setStep('map')}>Back</Button>
           </Stack>
@@ -364,7 +388,10 @@ export default function ImportData({ onImported }) {
       {step === 'done' && summary && (
         <Paper sx={{ p: { xs: 2, md: 3 }, textAlign: 'center' }}>
           <CheckCircleIcon color="success" sx={{ fontSize: 56, mb: 1 }} />
-          <Typography variant="h6" sx={{ mb: 2 }}>Import complete!</Typography>
+          <Typography variant="h6" sx={{ mb: 0.5 }}>Import complete!</Typography>
+          <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 2 }}>
+            ✅ {summary.imported ?? (summary.created + summary.revived + summary.existing)} imported, {summary.skipped?.length || 0} skipped, {(summary.existing || 0) + (summary.revived || 0)} duplicate-updated
+          </Typography>
           <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', sm: 'repeat(3, 1fr)' }, gap: 1.5, maxWidth: 560, mx: 'auto', mb: 2 }}>
             <Chip label={`New medicines: ${summary.created}`} color="success" />
             <Chip label={`Already existed: ${summary.existing}`} />
@@ -373,10 +400,28 @@ export default function ImportData({ onImported }) {
             <Chip label={`Batches updated: ${summary.batches_updated}`} color="info" />
             <Chip label={`Stock skipped: ${summary.stock_skipped}`} color={summary.stock_skipped ? 'warning' : 'default'} variant="outlined" />
           </Box>
-          {summary.skipped.length > 0 && (
+          {summary.skipped?.length > 0 && (
             <Alert severity="warning" sx={{ textAlign: 'left', mb: 2 }}>
-              {summary.skipped.length} problem(s): {summary.skipped.slice(0, 3).map((s) => `Row ${s.i} — ${s.reason}`).join(' | ')}
-              {summary.skipped.length > 3 ? ' …' : ''}
+              <AlertTitle>{summary.skipped.length} problem(s) / skipped row(s):</AlertTitle>
+              <Typography variant="body2" sx={{ mb: 1 }}>
+                {summary.skipped.slice(0, 3).map((s) => `Row ${s.i} — ${s.reason}`).join(' | ')}
+                {summary.skipped.length > 3 ? ' …' : ''}
+              </Typography>
+              <Button
+                size="small"
+                variant="outlined"
+                color="warning"
+                startIcon={<DownloadIcon />}
+                onClick={() => {
+                  const report = [
+                    ['Row', 'Reason'],
+                    ...summary.skipped.map((s) => [s.i, s.reason]),
+                  ];
+                  downloadCsv('MediStock-Import-Skipped-Rows.csv', report);
+                }}
+              >
+                Download full error report (CSV)
+              </Button>
             </Alert>
           )}
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
