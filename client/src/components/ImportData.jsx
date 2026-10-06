@@ -24,7 +24,7 @@ const FIELDS = [
   { key: 'type', label: 'Type (Tablet/Syrup…)', patterns: ['type', 'form', 'packing', 'pack', 'category', 'segment'] },
   { key: 'shelf', label: 'Shelf / Rack', patterns: ['shelf', 'rack', 'location', 'shelfno', 'rackno', 'godown', 'place'] },
   { key: 'gst_rate', label: 'GST %', patterns: ['gst', 'gstpercent', 'gstrate', 'tax', 'taxpercent', 'vat'] },
-  { key: 'buy_price', label: 'Buy Price / PTR', patterns: ['ptr', 'purchaseprice', 'purchaserate', 'buyprice', 'buyrate', 'tradeprice', 'cost', 'costprice', 'pprice'] },
+  { key: 'buy_price', label: 'Buy Price / PTR', patterns: ['ptr', 'purchaseprice', 'purchaserate', 'buyprice', 'buyrate', 'tradeprice', 'cost', 'costprice', 'pprice', 'purchrate', 'purrate', 'prate'] },
   { key: 'sell_price', label: 'Sell Price / MRP', patterns: ['mrp', 'sellprice', 'sellingprice', 'saleprice', 'retailprice', 'retail', 'price', 'rprice'] },
   { key: 'batch_no', label: 'Batch No', patterns: ['batch', 'batchno', 'batchnumber', 'batchid', 'bno'] },
   { key: 'expiry_date', label: 'Expiry Date', patterns: ['expiry', 'expirydate', 'expdate', 'exp', 'expdateyyyy mm dd', 'expdt', 'expdateyyyy mmdd', 'expdate', 'expry'] },
@@ -48,36 +48,76 @@ function guessField(key, headers) {
   return '';
 }
 
-/* Mirrors the server's importDateToISO so preview rows match what will import. */
+/* Mirrors the server's importDateToISO so preview rows match what will import.
+   Supports: YYYY-MM-DD, DD/MM/YYYY, DD-MM-YYYY, DD.MM.YY,
+   MM/YYYY, MM-YYYY, MM.YYYY, M/YYYY, MM/YY, MMM-YYYY, MMM/YYYY (pharma expiry).
+   All month-only formats normalize to the LAST day of the specified month. */
+const MONTH_NAMES = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
 function toISODate(v) {
   if (!v) return null;
   const s = String(v).trim();
-  let m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(s) || /^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/.exec(s);
-  if (!m) return null;
-  let y, mo, d;
-  if (/^\d{4}-/.test(s)) { y = +m[1]; mo = +m[2]; d = +m[3]; }
-  else { d = +m[1]; mo = +m[2]; y = +m[3]; if (y < 100) y += 2000; }
-  const dt = new Date(Date.UTC(y, mo - 1, d));
-  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
-  return dt.toISOString().slice(0, 10);
+  // 1. Full date: YYYY-MM-DD
+  let m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(s);
+  if (m) {
+    const y = +m[1], mo = +m[2], d = +m[3];
+    const dt = new Date(Date.UTC(y, mo - 1, d));
+    if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
+    return dt.toISOString().slice(0, 10);
+  }
+  // 2. Full date: DD/MM/YYYY, DD-MM-YYYY, DD.MM.YY
+  m = /^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/.exec(s);
+  if (m) {
+    let d = +m[1], mo = +m[2], y = +m[3];
+    if (y < 100) y += 2000;
+    const dt = new Date(Date.UTC(y, mo - 1, d));
+    if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
+    return dt.toISOString().slice(0, 10);
+  }
+  // 3. Month/Year only: MM/YYYY, M/YYYY, MM-YYYY, MM.YYYY, MM/YY (pharma expiry -> month-end date)
+  m = /^(\d{1,2})[\/\-.](\d{2,4})$/.exec(s);
+  if (m) {
+    const mo = +m[1]; let y = +m[2];
+    if (y < 100) y += 2000;
+    if (mo < 1 || mo > 12) return null;
+    return new Date(Date.UTC(y, mo, 0)).toISOString().slice(0, 10);
+  }
+  // 4. Named month: MMM/YYYY, MMM-YYYY, MMM YYYY, MMM-YY (e.g. Aug-2027 -> month-end date)
+  m = /^([a-zA-Z]{3,9})[\/\-.\s]+(\d{2,4})$/.exec(s);
+  if (m) {
+    const prefix = m[1].slice(0, 3).toLowerCase();
+    const mo = MONTH_NAMES[prefix];
+    if (!mo) return null;
+    let y = +m[2];
+    if (y < 100) y += 2000;
+    return new Date(Date.UTC(y, mo, 0)).toISOString().slice(0, 10);
+  }
+  return null;
 }
 
 function buildRows(parsed, mapping) {
-  return parsed.rows.map((raw) => {
-    const get = (k) => (mapping[k] ? String(raw.cells[mapping[k]] ?? '').trim() : '');
-    return {
-      i: raw.i,
-      name: get('name'), company: get('company'), type: get('type'), shelf: get('shelf'),
-      gst_rate: get('gst_rate'), buy_price: get('buy_price'), sell_price: get('sell_price'),
-      batch_no: get('batch_no'), expiry_date: get('expiry_date'), quantity: get('quantity'),
-    };
-  });
+  return parsed.rows
+    .map((raw) => {
+      const get = (k) => (mapping[k] ? String(raw.cells[mapping[k]] ?? '').trim() : '');
+      return {
+        i: raw.i,
+        name: get('name'), company: get('company'), type: get('type'), shelf: get('shelf'),
+        gst_rate: get('gst_rate'), buy_price: get('buy_price'), sell_price: get('sell_price'),
+        batch_no: get('batch_no'), expiry_date: get('expiry_date'), quantity: get('quantity'),
+      };
+    })
+    .filter((r) => {
+      // FIX 3: Silent Empty-Row Guard — ignore rows where all cells are empty
+      return Boolean(
+        r.name || r.company || r.type || r.shelf || r.gst_rate ||
+        r.buy_price || r.sell_price || r.batch_no || r.expiry_date || r.quantity
+      );
+    });
 }
 
 function rowProblem(r) {
-  if (!r.name) return 'Medicine name is empty';
+  if (!r.name) return 'Missing medicine name';
   const qty = Number(String(r.quantity).replace(/[₹,\s]/g, ''));
-  if (qty > 0 && !toISODate(r.expiry_date)) return 'Expiry date not readable — its stock will be skipped';
+  if (qty > 0 && !toISODate(r.expiry_date)) return `Expiry format unrecognized (${r.expiry_date || 'blank'})`;
   return null;
 }
 
@@ -239,31 +279,72 @@ export default function ImportData({ onImported }) {
             {mapped.length - okCount > 0 && <Chip label={`${mapped.length - okCount} rows will be skipped`} color="warning" variant="outlined" />}
             {mapping.batch_no && mapping.quantity && <Chip label="Stock will import batch-wise" color="info" variant="outlined" />}
           </Stack>
+
+          {mapped.some((_, i) => problems[i]) && (
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              <AlertTitle>Rows that will be skipped ({mapped.length - okCount}):</AlertTitle>
+              <Stack spacing={0.5} sx={{ mt: 0.5 }}>
+                {mapped.map((r, i) => problems[i] ? (
+                  <Typography key={r.i || i} variant="body2" sx={{ fontSize: '0.85rem' }}>
+                    • <b>Row {r.i || i + 1}{r.name ? ` (${r.name})` : ''}:</b> skipped — {problems[i]}
+                  </Typography>
+                ) : null).filter(Boolean).slice(0, 10)}
+                {mapped.filter((_, i) => problems[i]).length > 10 && (
+                  <Typography variant="caption" color="text.secondary">
+                    …and {mapped.filter((_, i) => problems[i]).length - 10} more skipped rows
+                  </Typography>
+                )}
+              </Stack>
+            </Alert>
+          )}
+
           <Box sx={{ maxHeight: 340, overflow: 'auto', border: '1px solid #e0e6e4', borderRadius: 1 }}>
             <Table size="small" stickyHeader>
               <TableHead>
                 <TableRow>
-                  <TableCell>Status</TableCell>
+                  <TableCell sx={{ minWidth: 100 }}>Status</TableCell>
                   <TableCell>Medicine</TableCell>
                   <TableCell>Company</TableCell>
                   <TableCell>MRP</TableCell>
                   <TableCell>Batch</TableCell>
                   <TableCell>Expiry</TableCell>
                   <TableCell>Qty</TableCell>
+                  <TableCell sx={{ minWidth: 180 }}>Note / Skip Reason</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
                 {mapped.slice(0, 100).map((r, i) => (
-                  <TableRow key={r.i}>
-                    <TableCell>{problems[i]
-                      ? <ErrorOutlineIcon color="warning" fontSize="small" titleAccess={problems[i]} />
-                      : <CheckCircleIcon color="success" fontSize="small" />}</TableCell>
+                  <TableRow key={r.i} sx={{ bgcolor: problems[i] ? 'rgba(237, 108, 2, 0.08)' : 'inherit' }}>
+                    <TableCell>
+                      {problems[i] ? (
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                          <ErrorOutlineIcon color="warning" fontSize="small" />
+                          <Chip size="small" label="Skipped" color="warning" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
+                        </Box>
+                      ) : (
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                          <CheckCircleIcon color="success" fontSize="small" />
+                          <Chip size="small" label="Ready" color="success" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
+                        </Box>
+                      )}
+                    </TableCell>
                     <TableCell>{r.name || <em style={{ color: '#c55' }}>—</em>}</TableCell>
                     <TableCell>{r.company}</TableCell>
                     <TableCell>{r.sell_price ? fmt(r.sell_price) : ''}</TableCell>
                     <TableCell>{r.batch_no}</TableCell>
                     <TableCell>{r.expiry_date}</TableCell>
                     <TableCell>{r.quantity}</TableCell>
+                    <TableCell>
+                      {problems[i] ? (
+                        <Typography variant="caption" color="warning.dark" sx={{ fontWeight: 600 }}>
+                          Row {r.i || i + 1} — skipped: {problems[i]}
+                        </Typography>
+                      ) : (
+                        <Typography variant="caption" color="text.secondary">
+                          Ready to import
+                        </Typography>
+                      )}
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
