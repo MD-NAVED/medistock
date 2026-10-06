@@ -1022,7 +1022,7 @@ app.post('/api/purchases/:id/reverse', requireAuth, requireOwner, async (req, re
 // ==========================================
 // GEMINI AI SCANNER ENDPOINT (L2 Vision)
 // ==========================================
-app.post('/api/purchases/scan-invoice', requireAuth, requireFeature('scanner'), aiScannerLimiter, async (req, res, next) => {
+const scanInvoiceHandler = async (req, res, next) => {
   try {
     const { image_base64 } = req.body;
     if (!image_base64) {
@@ -1074,9 +1074,10 @@ Ye handwritten ho sakta hai — handwriting dhyan se padho`;
 
     // Support both classic ('AIzaSy') and new v2 ('AQ.') API key formats
     const isClassicKey = apiKey.startsWith('AIzaSy');
+    const modelName = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
     const geminiUrl = isClassicKey
-      ? `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${apiKey}`
-      : `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent`;
+      ? `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`
+      : `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`;
     const geminiHeaders = {
       'Content-Type': 'application/json',
       ...(!isClassicKey ? { 'x-goog-api-key': apiKey } : {})
@@ -1120,7 +1121,7 @@ Ye handwritten ho sakta hai — handwriting dhyan se padho`;
     try {
       geminiRes = await makeGeminiRequest();
     } catch (e) {
-      console.error('[Gemini] API call failed:', e.name || 'Error', e.message || e);
+      console.error(`[Invoice Scanner] engine=${modelName} API call failed:`, e.name || 'Error', e.message || e);
       if (typeof Sentry !== 'undefined') {
         Sentry.captureException(e);
       }
@@ -1131,16 +1132,16 @@ Ye handwritten ho sakta hai — handwriting dhyan se padho`;
     }
 
     if (geminiRes.status === 429) {
-      console.warn('[Gemini] Rate limit hit (429)');
+      console.warn(`[Invoice Scanner] engine=${modelName} Rate limit hit (429)`);
       return res.status(503).json({ error: 'AI quota exceeded — thodi der me try karo' });
     }
     
     if (!geminiRes.ok) {
       const status = geminiRes.status;
       const errorText = await geminiRes.text().catch(() => 'Unknown upstream error');
-      console.error('[Gemini] API call failed:', status, errorText);
+      console.error(`[Invoice Scanner] engine=${modelName} API call failed:`, status, errorText);
       if (status === 404) {
-        console.error('[Gemini] Model gemini-3.6-flash not found or not available for this key. Check available models.');
+        console.error(`[Invoice Scanner] Model ${modelName} not found or not available for this key. Check available models.`);
       }
       if (typeof Sentry !== 'undefined' && status >= 500) {
         Sentry.captureMessage(`[Gemini] API upstream error ${status}: ${errorText}`);
@@ -1164,7 +1165,7 @@ Ye handwritten ho sakta hai — handwriting dhyan se padho`;
         if (!retryRes.ok) {
           const retryStatus = retryRes.status;
           const retryErrText = await retryRes.text().catch(() => 'Unknown error text');
-          console.error('[Gemini] Retry API call failed:', retryStatus, retryErrText);
+          console.error(`[Invoice Scanner] engine=${modelName} Retry API call failed:`, retryStatus, retryErrText);
           return res.status(502).json({ error: 'Upstream AI error.' });
         }
         const retryResJson = await retryRes.json();
@@ -1209,10 +1210,10 @@ Ye handwritten ho sakta hai — handwriting dhyan se padho`;
     });
 
     const latency_ms = Date.now() - startTime;
-    console.log(`[Gemini Scanner] latency=${latency_ms}ms items=${parsedData.items.length} success=true`);
+    console.log(`[Invoice Scanner] engine=${modelName} latency=${latency_ms}ms items=${parsedData.items.length} success=true`);
 
     return res.json({
-      engine: 'gemini',
+      engine: modelName,
       invoice_number: parsedData.invoice_number || '',
       supplier_name: parsedData.supplier_name || '',
       invoice_date: parsedData.invoice_date || '',
@@ -1222,7 +1223,10 @@ Ye handwritten ho sakta hai — handwriting dhyan se padho`;
   } catch (err) {
     next(err);
   }
-});
+};
+
+app.post('/api/purchases/scan-invoice', requireAuth, requireFeature('scanner'), aiScannerLimiter, scanInvoiceHandler);
+app.post('/api/scan-invoice', requireAuth, requireFeature('scanner'), aiScannerLimiter, scanInvoiceHandler);
 
 app.post('/api/purchases', requireAuth, async (req, res, next) => {
   try {

@@ -425,11 +425,14 @@ export async function parseInvoiceFile(file, medicinesList = [], onProgress = ()
       reader.readAsDataURL(compressedBlob);
     });
     const parsed = await parseInvoiceViaServer(base64, medicinesList);
+    console.log(`[Invoice Scanner] engine=${parsed.engine || 'gemini-3.6-flash'} completed successfully`);
     onProgress('Complete!', 100);
     return parsed;
   } catch (err) {
-    console.warn('Gemini failed, falling back to local OCR:', err);
+    console.warn(`[Invoice Scanner] AI engine failed (${err?.message || 'error'}), falling back to engine=tesseract (local OCR):`, err);
     onProgress('📄 Local OCR (fallback) - Initializing...', 60);
-    return parseInvoiceImage(compressedBlob, medicinesList, onProgress);
+    const parsed = await parseInvoiceImage(compressedBlob, medicinesList, onProgress);
+    console.log('[Invoice Scanner] engine=tesseract (fallback) completed successfully');
+    return { ...parsed, engine: 'tesseract-fallback' };
   }
 }
