@@ -270,3 +270,26 @@ The Excel/CSV Import Wizard (`Settings` $\rightarrow$ `Import Data`) allows chem
   - Add UI toggle in Import Wizard Step 2/3: *"Batch Quantity Mode: [Replace Existing (Default) | Add to Existing]"*.
   - When in ADD mode: `quantity = batches.quantity + EXCLUDED.quantity`.
   - Trigger when real pharmacy users in the field report multiple invoices with shared batch numbers.
+- **Read-Only Database User for Agent Operations**:
+  - Configure a dedicated PostgreSQL role with `SELECT`-only privileges for agent telemetry, log inspection, and troubleshooting queries.
+  - Production writes/mutations must require explicit elevated credentials and peer-reviewed code.
+
+---
+
+### I. Database Script Safety Rules & Operational Guardrails
+
+To prevent unintended cross-tenant modifications or data corruption during operational maintenance, all scripts and agents MUST adhere to these strict rules:
+
+1. **Mandatory Explicit `WHERE` Clauses**:
+   - Every `UPDATE` and `DELETE` SQL statement executed in any operational or migration script MUST include an explicit, parameterized `WHERE` clause targeting exact tenant or entity IDs (e.g. `WHERE id = $1`).
+   - Unbounded queries without a `WHERE` clause are strictly prohibited.
+
+2. **Production Data Access Protocol**:
+   - Production database mutations are allowed ONLY through:
+     - **Option (i)**: Formally reviewed, CI-tested, and merged GitHub Pull Requests containing idempotent migrations.
+     - **Option (ii)**: Manual execution by the owner directly in the Supabase SQL Editor.
+   - Ad-hoc CLI scripts or unreviewed automation scripts must NEVER write directly to production.
+
+3. **Pre-Commit Row Count Assertion**:
+   - Any script performing administrative updates must execute inside an explicit PostgreSQL transaction (`BEGIN ... COMMIT`).
+   - The script must check and print the affected `rowCount` **BEFORE** committing. If `rowCount !== expectedCount`, the script must execute `ROLLBACK` and immediately terminate with an error.
